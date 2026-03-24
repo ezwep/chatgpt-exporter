@@ -83,6 +83,18 @@ Click **Export options** to expand:
 
 The tool uses ChatGPT's internal API endpoints (the same ones the web app uses) with your session token. It fetches conversation lists, individual conversations with full message trees, project metadata and resources, and custom GPT configurations. No third-party APIs or services are involved — everything stays on your local machine.
 
+## Disclaimer
+
+**Use at your own risk.** This tool is provided as-is, without warranty of any kind.
+
+- **Unofficial API** — This tool uses ChatGPT's internal web API endpoints, which are undocumented and not part of the official OpenAI API. These endpoints may change, break, or be blocked at any time without notice.
+- **Terms of Service** — Using internal API endpoints may violate [OpenAI's Terms of Use](https://openai.com/policies/terms-of-use). You are solely responsible for ensuring your use complies with applicable terms and laws.
+- **Session token security** — Your session token grants full access to your ChatGPT account. This tool processes it locally and never transmits it to any third party, but you should **never share your token** with anyone. Treat it like a password.
+- **Your own data** — This tool only accesses your own conversations, projects, and GPTs. It is intended for personal data portability (consistent with GDPR Article 20), not for accessing other users' data.
+- **No affiliation** — This project is not affiliated with, endorsed by, or associated with OpenAI in any way.
+- **Rate limiting** — Excessive use may trigger rate limits or temporary blocks on your ChatGPT account. The tool includes built-in delays to minimize this risk, but no guarantees are made.
+- **Data accuracy** — Exported data is provided as-is from the API. The author is not responsible for missing, incomplete, or corrupted exports.
+
 ## Credits
 
 Inspired by the original browser console export script by [**ocombe**](https://gist.github.com/ocombe/1d7604bd29a91ceb716304ef8b5aa4b5).
