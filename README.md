@@ -101,6 +101,12 @@ Inspired by the original browser console export script by [**ocombe**](https://g
 
 This project extends that approach into a full local server with resume support, project & GPT export, HTML browsing, search, and a web UI.
 
+## Support
+
+If you find this tool useful, consider buying me a coffee:
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/ezwep)
+
 ## License
 
 MIT
