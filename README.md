@@ -2,6 +2,9 @@
 
 A zero-dependency Node.js tool that exports **all** your ChatGPT data — conversations, projects (with uploaded files), and custom GPTs — to JSON, Markdown, and browseable HTML.
 
+![ChatGPT Exporter UI](screenshots/ui-collapsed.png)
+![ChatGPT Exporter — Export options](screenshots/ui-expanded.png)
+
 ## Why this tool?
 
 OpenAI's built-in data export is slow, gives you a single massive JSON blob, and **doesn't include** custom GPT configurations or project resource files. This tool fills that gap.
