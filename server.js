@@ -12,7 +12,7 @@
  */
 
 import { createServer }                       from "node:http";
-import { writeFileSync, mkdirSync, existsSync, readFileSync, appendFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, readFileSync, appendFileSync, unlinkSync } from "node:fs";
 import { join, dirname }                      from "node:path";
 import { homedir }                            from "node:os";
 import { randomUUID }                         from "node:crypto";
@@ -162,9 +162,10 @@ function extractFileReferences(convo) {
   return refs;
 }
 
-async function downloadFile(fileId, token, fallbackName) {
+async function downloadFile(fileId, token, fallbackName, debugLog) {
   const meta = await apiGet(`files/download/${fileId}`, token);
-  const url = meta.download_url;
+  if (debugLog) debugLog(`files/download response keys: ${Object.keys(meta).join(",")} — ${JSON.stringify(meta).slice(0, 200)}`);
+  const url = meta.download_url || meta.url || meta.file_url;
   if (!url) throw new Error("No download_url returned");
   const { buffer, contentType } = await apiFetchBinary(url, token);
   let filename = meta.file_name || fallbackName || fileId;
@@ -647,11 +648,12 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, se
               const fileId   = rawId.startsWith("file") ? rawId : `file-${rawId}`;
               const fileName = f.name || f.filename || rawId;
               try {
-                const { buffer } = await downloadFile(fileId, token, fileName);
-                const safe = sanitizeFilename(fileName);
+                const debugOnce = filesList.indexOf(f) === 0 ? log : null;
+                const { buffer, filename: dlName } = await downloadFile(fileId, token, fileName, debugOnce);
+                const safe = sanitizeFilename(dlName || fileName);
                 writeFileSync(join(resDir, safe), buffer);
                 zipFiles.push({ path: `projects/${projSafe}/resources/${safe}`, data: buffer });
-                log(`PROJECT  "${projName}" resource: ${fileName}`);
+                log(`PROJECT  "${projName}" resource: ${dlName || fileName}`);
               } catch (e) { log(`PROJECT  "${projName}" file failed: ${e.message}`); }
             }
           }
@@ -801,7 +803,7 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, se
           return;
         }
 
-        // Resume: old-format file exists — migrate to date-prefixed name
+        // Resume: old-format file exists — migrate to date-prefixed name, delete old files
         if (existsSync(oldJsonPath)) {
           try {
             const jsonStr = readFileSync(oldJsonPath, "utf8");
@@ -811,6 +813,10 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, se
             writeFileSync(jsonPath, jsonStr, "utf8");
             writeFileSync(join(convMdDir, `${fname}.md`), conversationToMarkdown(convo, {}), "utf8");
             ensureHtml(convo, fname);
+            // Remove old-format files (json, md, html) to avoid duplicates
+            try { unlinkSync(oldJsonPath); } catch {}
+            try { unlinkSync(join(convMdDir,    `${oldFname}.md`));   } catch {}
+            try { unlinkSync(join(convHtmlDir,  `${oldFname}.html`)); } catch {}
           } catch { /* non-fatal — fall through to fresh download */ }
           skipped++;
           const done = newCount + skipped + failed.length;
