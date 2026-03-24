@@ -96,6 +96,15 @@ class Semaphore {
 
 // ── File utilities ───────────────────────────────────────────────────
 
+function safeDate(ct) {
+  if (!ct) return "";
+  try {
+    const d = typeof ct === "number" ? new Date(ct > 1e10 ? ct : ct * 1000) : new Date(ct);
+    if (isNaN(d)) return "";
+    return d.toISOString().slice(0, 10);
+  } catch { return ""; }
+}
+
 function sanitizeFilename(name, maxLen = 80) {
   return name.replace(/[<>:"/\\|?*]/g, "_").replace(/^[. ]+|[. ]+$/g, "").slice(0, maxLen) || "untitled";
 }
@@ -736,9 +745,7 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, se
         ? `projects/${sanitizeFilename(item.projectName)}`
         : "__root__";
       if (!convosByGroup[key]) convosByGroup[key] = [];
-      const datePfxItem = item.create_time
-        ? new Date(item.create_time * 1000).toISOString().slice(0, 10) + "_"
-        : "";
+      const datePfxItem = safeDate(item.create_time) ? safeDate(item.create_time) + "_" : "";
       const s = sanitizeFilename(item.title || "Untitled");
       convosByGroup[key].push({ fname: `${datePfxItem}${s}_${item.id.slice(0, 8)}`, title: item.title || "Untitled" });
     }
@@ -759,9 +766,8 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, se
         const { id: cid, title: rawTitle, projectName } = item;
         const title    = rawTitle || "Untitled";
         const safe     = sanitizeFilename(title);
-        const datePfx  = item.create_time
-          ? new Date(item.create_time * 1000).toISOString().slice(0, 10) + "_"
-          : "";
+        const d        = safeDate(item.create_time);
+        const datePfx  = d ? d + "_" : "";
         const fname    = `${datePfx}${safe}_${cid.slice(0, 8)}`;
         const oldFname = `${safe}_${cid.slice(0, 8)}`; // pre-date format (backward compat)
 
