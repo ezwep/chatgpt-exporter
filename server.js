@@ -172,27 +172,23 @@ function extractFileReferences(convo) {
 }
 
 async function downloadFile(fileId, token, fallbackName, debugLog, gizmoId) {
-  // For project files: /simple resolves to the real file_id, then download via /files/download/{resolvedId}
+  // For project files: use download endpoint with gizmo_id query parameter
   if (gizmoId) {
     try {
-      const simpleMeta = await apiGet(`files/${fileId}/simple?gizmo_id=${encodeURIComponent(gizmoId)}`, token);
-      const resolvedId = simpleMeta.file_id || simpleMeta.id || fileId;
-      if (debugLog) debugLog(`files/${fileId}/simple → resolved: ${resolvedId}`);
-      const dlMeta = await apiGet(`files/download/${resolvedId}`, token);
-      const dlUrl = dlMeta.download_url || dlMeta.url || dlMeta.file_url || dlMeta.presigned_url || dlMeta.signed_url;
+      const meta = await apiGet(`files/${fileId}/download?gizmo_id=${encodeURIComponent(gizmoId)}`, token);
+      const dlUrl = meta.download_url || meta.url || meta.file_url || meta.presigned_url || meta.signed_url;
       if (dlUrl) {
         const { buffer, contentType } = await apiFetchBinary(dlUrl, token);
-        let filename = simpleMeta.file_name || simpleMeta.name || fallbackName || fileId;
+        let filename = meta.file_name || meta.name || fallbackName || fileId;
         if (!filename.includes(".") && contentType) {
           const mime = contentType.split(";")[0].trim();
-          const ext  = MIME_TO_EXT[mime];
+          const ext = MIME_TO_EXT[mime];
           if (ext) filename += ext;
         }
         return { filename, buffer };
       }
-      if (debugLog) debugLog(`files/download/${resolvedId}: no URL (keys: ${Object.keys(dlMeta).join(",")})`);
     } catch (e) {
-      if (debugLog) debugLog(`files/${fileId}/simple chain failed: ${e.message} — falling back`);
+      if (debugLog) debugLog(`files/${fileId}/download?gizmo_id failed: ${e.message}`);
     }
   }
 
