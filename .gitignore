@@ -1,5 +1,23 @@
+# IDE / Agent
+.claude/
+.vscode/
+.idea/
+
+# Environment & Secrets
+.env
+.env.*
+
+# Logs & Exports
 Export/
+logs/
 *.log
-*.zip
+
+# Node.js
 node_modules/
+
+# Archives
+*.zip
+
+# OS
 .DS_Store
+Thumbs.db

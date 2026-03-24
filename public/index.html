@@ -97,6 +97,25 @@
   .toggle input:checked + .slider::before { transform: translateX(18px); }
   .toggle-label { font-size: 14px; color: #94a3b8; cursor: pointer; user-select: none; }
   .hidden { display: none; }
+  .options-section { margin: 0 0 16px; }
+  .options-header { display: flex; align-items: center; gap: 8px; cursor: pointer; color: #94a3b8; font-size: 13px; user-select: none; padding: 4px 0; }
+  .options-header:hover { color: #cbd5e1; }
+  .options-arrow { display: inline-block; transition: transform 0.2s; }
+  .options-arrow.open { transform: rotate(90deg); }
+  .options-body { margin-top: 12px; padding: 14px; background: #0f172a; border-radius: 8px; border: 1px solid #334155; }
+  .options-group { margin-bottom: 14px; }
+  .options-group:last-child { margin-bottom: 0; }
+  .options-group-label { font-size: 11px; color: #64748b; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .opt-checks { display: flex; gap: 16px; flex-wrap: wrap; }
+  .opt-check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #cbd5e1; cursor: pointer; }
+  .opt-check input[type="checkbox"] { accent-color: #3b82f6; width: 14px; height: 14px; cursor: pointer; }
+  .date-row { display: flex; align-items: flex-end; gap: 8px; }
+  .date-field { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  .date-field label { font-size: 12px; color: #64748b; }
+  .date-field input[type="date"] { background: #1e293b; border: 2px solid #334155; border-radius: 8px; color: #e2e8f0; padding: 8px 10px; font-size: 13px; outline: none; width: 100%; transition: border-color 0.2s; }
+  .date-field input[type="date"]:focus { border-color: #3b82f6; }
+  .date-sep { color: #64748b; font-size: 13px; padding-bottom: 10px; }
+  .options-hint { font-size: 11px; color: #475569; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -142,20 +161,60 @@
     </select>
   </div>
 
-  <div class="toggle-row">
-    <label class="toggle">
-      <input type="checkbox" id="keep-awake" checked>
-      <span class="slider"></span>
-    </label>
-    <span class="toggle-label">Keep Mac awake during export</span>
-  </div>
-
-  <div class="toggle-row">
-    <label class="toggle">
-      <input type="checkbox" id="create-zip">
-      <span class="slider"></span>
-    </label>
-    <span class="toggle-label">Create ZIP archive</span>
+  <div class="options-section">
+    <div class="options-header" onclick="toggleOptions(this)">
+      <span class="options-arrow">▸</span>
+      <span>Export options</span>
+    </div>
+    <div class="options-body hidden">
+      <div class="options-group">
+        <div class="options-group-label">What to export</div>
+        <div class="opt-checks">
+          <label class="opt-check"><input type="checkbox" id="opt-conversations" checked> Conversations</label>
+          <label class="opt-check"><input type="checkbox" id="opt-projects" checked> Projects</label>
+          <label class="opt-check"><input type="checkbox" id="opt-gpts" checked> GPTs</label>
+        </div>
+      </div>
+      <div class="options-group">
+        <div class="options-group-label">File formats</div>
+        <div class="opt-checks">
+          <label class="opt-check"><input type="checkbox" id="opt-json" checked> JSON</label>
+          <label class="opt-check"><input type="checkbox" id="opt-markdown" checked> Markdown</label>
+          <label class="opt-check"><input type="checkbox" id="opt-html" checked> HTML</label>
+        </div>
+      </div>
+      <div class="options-group">
+        <div class="options-group-label">Date range (conversations)</div>
+        <div class="date-row">
+          <div class="date-field">
+            <label for="opt-date-from">From</label>
+            <input type="date" id="opt-date-from">
+          </div>
+          <span class="date-sep">to</span>
+          <div class="date-field">
+            <label for="opt-date-to">Until</label>
+            <input type="date" id="opt-date-to">
+          </div>
+        </div>
+        <div class="options-hint">Leave empty to export all</div>
+      </div>
+      <div class="options-group">
+        <div class="toggle-row" style="margin:0">
+          <label class="toggle">
+            <input type="checkbox" id="keep-awake" checked>
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label">Keep computer awake during export</span>
+        </div>
+        <div class="toggle-row" style="margin-top:10px">
+          <label class="toggle">
+            <input type="checkbox" id="create-zip">
+            <span class="slider"></span>
+          </label>
+          <span class="toggle-label">Create ZIP archive</span>
+        </div>
+      </div>
+    </div>
   </div>
 
   <button id="export-btn" onclick="startExport()">Export conversations</button>
@@ -176,6 +235,13 @@
     document.querySelectorAll('kbd').forEach(el => {
       el.textContent = el.textContent.replace('Cmd', 'Ctrl');
     });
+  }
+
+  function toggleOptions(header) {
+    const arrow = header.querySelector('.options-arrow');
+    const body  = header.nextElementSibling;
+    body.classList.toggle('hidden');
+    arrow.classList.toggle('open');
   }
 
   async function pickFolder() {
@@ -203,6 +269,18 @@
     const concurrency = parseInt(document.getElementById('concurrency').value, 10);
     const createZip   = document.getElementById('create-zip').checked;
     const keepAwake   = document.getElementById('keep-awake').checked;
+    const exportOptions = {
+      conversations: document.getElementById('opt-conversations').checked,
+      projects:      document.getElementById('opt-projects').checked,
+      gpts:          document.getElementById('opt-gpts').checked,
+      formats: {
+        json:     document.getElementById('opt-json').checked,
+        markdown: document.getElementById('opt-markdown').checked,
+        html:     document.getElementById('opt-html').checked,
+      },
+      dateFrom: document.getElementById('opt-date-from').value,
+      dateTo:   document.getElementById('opt-date-to').value,
+    };
 
     if (!raw) return alert('Please paste the session JSON first.');
 
@@ -231,13 +309,14 @@
     fetch('/start-export', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, outputDir, concurrency, createZip, keepAwake }),
+      body: JSON.stringify({ token, outputDir, concurrency, createZip, keepAwake, exportOptions }),
     })
       .then(r => r.json())
       .then(data => {
         if (data.error) { showResult('error', data.error); resetUI(); return; }
 
         const evtSource = new EventSource('/progress/' + data.exportId);
+        let exportDone = false;
 
         evtSource.addEventListener('status', (e) => {
           document.getElementById('progress-text').textContent = e.data;
@@ -260,6 +339,7 @@
         });
 
         evtSource.addEventListener('done', (e) => {
+          exportDone = true;
           evtSource.close();
           const d = JSON.parse(e.data);
           document.getElementById('progress-bar').style.width     = '100%';
@@ -281,6 +361,7 @@
         });
 
         evtSource.onerror = () => {
+          if (exportDone) return; // server closed connection after done — not an error
           evtSource.close();
           showResult('error', 'Connection lost.');
           resetUI();

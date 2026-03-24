@@ -12,8 +12,8 @@
  */
 
 import { createServer }                       from "node:http";
-import { writeFileSync, mkdirSync, existsSync, readFileSync, appendFileSync, unlinkSync } from "node:fs";
-import { join, dirname }                      from "node:path";
+import { writeFileSync, mkdirSync, existsSync, readFileSync, appendFileSync, unlinkSync, readdirSync, openSync, readSync, closeSync } from "node:fs";
+import { join, dirname, basename }             from "node:path";
 import { homedir }                            from "node:os";
 import { randomUUID }                         from "node:crypto";
 import { Buffer }                             from "node:buffer";
@@ -171,13 +171,47 @@ function extractFileReferences(convo) {
   return refs;
 }
 
-async function downloadFile(fileId, token, fallbackName, debugLog) {
-  const meta = await apiGet(`files/download/${fileId}`, token);
-  if (debugLog) debugLog(`files/download response keys: ${Object.keys(meta).join(",")} — ${JSON.stringify(meta).slice(0, 200)}`);
-  const url = meta.download_url || meta.url || meta.file_url;
-  if (!url) throw new Error("No download_url returned");
+async function downloadFile(fileId, token, fallbackName, debugLog, gizmoId) {
+  // For project files: /simple resolves to the real file_id, then download via /files/download/{resolvedId}
+  if (gizmoId) {
+    try {
+      const simpleMeta = await apiGet(`files/${fileId}/simple?gizmo_id=${encodeURIComponent(gizmoId)}`, token);
+      const resolvedId = simpleMeta.file_id || simpleMeta.id || fileId;
+      if (debugLog) debugLog(`files/${fileId}/simple → resolved: ${resolvedId}`);
+      const dlMeta = await apiGet(`files/download/${resolvedId}`, token);
+      const dlUrl = dlMeta.download_url || dlMeta.url || dlMeta.file_url || dlMeta.presigned_url || dlMeta.signed_url;
+      if (dlUrl) {
+        const { buffer, contentType } = await apiFetchBinary(dlUrl, token);
+        let filename = simpleMeta.file_name || simpleMeta.name || fallbackName || fileId;
+        if (!filename.includes(".") && contentType) {
+          const mime = contentType.split(";")[0].trim();
+          const ext  = MIME_TO_EXT[mime];
+          if (ext) filename += ext;
+        }
+        return { filename, buffer };
+      }
+      if (debugLog) debugLog(`files/download/${resolvedId}: no URL (keys: ${Object.keys(dlMeta).join(",")})`);
+    } catch (e) {
+      if (debugLog) debugLog(`files/${fileId}/simple chain failed: ${e.message} — falling back`);
+    }
+  }
+
+  let meta = await apiGet(`files/download/${fileId}`, token);
+  if (debugLog) debugLog(`files/download/${fileId}: ${JSON.stringify(meta)}`);
+  let url = meta.download_url || meta.url || meta.file_url || meta.presigned_url || meta.signed_url;
+
+  if (!url) {
+    try {
+      const meta2 = await apiGet(`files/${fileId}`, token);
+      if (debugLog) debugLog(`files/${fileId}: ${JSON.stringify(meta2)}`);
+      url = meta2.download_url || meta2.url || meta2.file_url || meta2.presigned_url || meta2.signed_url;
+      if (url) meta = meta2;
+    } catch { /* ignore fallback failure */ }
+  }
+
+  if (!url) throw new Error(`No download_url (keys: ${Object.keys(meta).join(",")})`);
   const { buffer, contentType } = await apiFetchBinary(url, token);
-  let filename = meta.file_name || fallbackName || fileId;
+  let filename = meta.file_name || meta.name || fallbackName || fileId;
   if (!filename.includes(".") && contentType) {
     const mime = contentType.split(";")[0].trim();
     const ext  = MIME_TO_EXT[mime];
@@ -392,6 +426,7 @@ function conversationToHtml(convo, fileMap = {}, allConversations = [], currentF
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"><\/script>
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release/build/highlight.min.js"><\/script>
 <script>
+if (window !== window.top) { document.querySelector('.sidebar')?.remove(); }
 document.addEventListener('DOMContentLoaded', () => {
   const renderer = new marked.Renderer();
   renderer.code = function({ text, lang }) {
@@ -526,16 +561,194 @@ function gptToMarkdown(gizmo) {
   return md;
 }
 
+// ── Export index (root index.html) ───────────────────────────────────
+
+function extractHtmlTitle(htmlPath) {
+  try {
+    const fd  = openSync(htmlPath, "r");
+    const buf = Buffer.alloc(256);
+    const n   = readSync(fd, buf, 0, 256, 0);
+    closeSync(fd);
+    const m = buf.subarray(0, n).toString("utf8").match(/<title>([^<]*)<\/title>/);
+    return m ? m[1] : basename(htmlPath, ".html");
+  } catch { return basename(htmlPath, ".html"); }
+}
+
+function generateExportIndex(rootDir, allProjects) {
+  const htmlDir    = join(rootDir, "html");
+  const rootConvos = existsSync(htmlDir)
+    ? readdirSync(htmlDir).filter((f) => f.endsWith(".html")).sort().reverse()
+        .map((f) => ({ fname: f, title: extractHtmlTitle(join(htmlDir, f)) }))
+    : [];
+
+  const projects = (allProjects || []).map((proj) => {
+    const safe        = sanitizeFilename(proj.name);
+    const projHtmlDir = join(rootDir, "projects", safe, "html");
+    const convos      = existsSync(projHtmlDir)
+      ? readdirSync(projHtmlDir).filter((f) => f.endsWith(".html")).sort().reverse()
+          .map((f) => ({ fname: f, title: extractHtmlTitle(join(projHtmlDir, f)) }))
+      : [];
+    return { name: proj.name, safe, convos };
+  });
+
+  writeFileSync(join(rootDir, "index.html"), buildExportIndexHtml(rootConvos, projects), "utf8");
+}
+
+function buildExportIndexHtml(rootConvos, projects) {
+  const LOGO = `<svg viewBox="0 0 41 41" fill="none" xmlns="http://www.w3.org/2000/svg" width="20" height="20"><path d="M37.532 16.87a9.963 9.963 0 0 0-.856-8.184 10.078 10.078 0 0 0-10.855-4.835A9.964 9.964 0 0 0 18.306.5a10.079 10.079 0 0 0-9.614 6.977 9.967 9.967 0 0 0-6.664 4.834 10.08 10.08 0 0 0 1.24 11.817 9.965 9.965 0 0 0 .856 8.185 10.079 10.079 0 0 0 10.855 4.835 9.965 9.965 0 0 0 7.516 3.35 10.078 10.078 0 0 0 9.617-6.981 9.967 9.967 0 0 0 6.663-4.834 10.079 10.079 0 0 0-1.243-11.813ZM22.498 37.886a7.474 7.474 0 0 1-4.799-1.735c.061-.033.168-.091.237-.134l7.964-4.6a1.294 1.294 0 0 0 .655-1.134V19.054l3.366 1.944a.12.12 0 0 1 .066.092v9.299a7.505 7.505 0 0 1-7.49 7.496ZM6.392 31.006a7.471 7.471 0 0 1-.894-5.023c.06.036.162.099.237.141l7.964 4.6a1.297 1.297 0 0 0 1.308 0l9.724-5.614v3.888a.12.12 0 0 1-.048.103l-8.051 4.649a7.504 7.504 0 0 1-10.24-2.744ZM4.297 13.62A7.469 7.469 0 0 1 8.2 10.333c0 .068-.004.19-.004.274v9.201a1.294 1.294 0 0 0 .654 1.132l9.723 5.614-3.366 1.944a.12.12 0 0 1-.114.012L7.044 23.86a7.504 7.504 0 0 1-2.747-10.24Zm27.658 6.437-9.724-5.615 3.367-1.943a.121.121 0 0 1 .114-.012l8.048 4.648a7.498 7.498 0 0 1-1.158 13.528V21.36a1.293 1.293 0 0 0-.647-1.132v-.17Zm3.35-5.043c-.059-.037-.162-.099-.236-.141l-7.965-4.6a1.298 1.298 0 0 0-1.308 0l-9.723 5.614v-3.888a.12.12 0 0 1 .048-.103l8.05-4.645a7.497 7.497 0 0 1 11.135 7.763Zm-21.063 6.929-3.367-1.944a.12.12 0 0 1-.065-.092v-9.299a7.497 7.497 0 0 1 12.293-5.756 6.94 6.94 0 0 0-.236.134l-7.965 4.6a1.294 1.294 0 0 0-.654 1.132l-.006 11.225Zm1.829-3.943 4.33-2.501 4.332 2.5v5l-4.331 2.5-4.331-2.5V18Z" fill="currentColor"/></svg>`;
+
+  const projectsHtml = projects.length ? `
+    <div class="nav-section">
+      <div class="nav-section-hdr">Projects</div>
+      ${projects.map((p) => `
+      <div class="nav-project">
+        <button class="nav-proj-btn" onclick="toggleProj(this)">
+          <svg class="folder-svg" viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/></svg>
+          <span>${escapeHtml(p.name)}</span>
+          <span class="chevron">▸</span>
+        </button>
+        <div class="nav-proj-items hidden">
+          ${p.convos.map((c) => `<a class="nav-item" href="projects/${encodeURIComponent(p.safe)}/html/${encodeURIComponent(c.fname)}" onclick="loadFrame(this,event)">${escapeHtml(c.title)}</a>`).join("\n          ")}
+        </div>
+      </div>`).join("\n")}
+    </div>` : "";
+
+  const convosHtml = rootConvos.length ? `
+    <div class="nav-section">
+      <div class="nav-section-hdr">Recent chats</div>
+      ${rootConvos.map((c) => `<a class="nav-item" href="html/${encodeURIComponent(c.fname)}" onclick="loadFrame(this,event)">${escapeHtml(c.title)}</a>`).join("\n      ")}
+    </div>` : "";
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ChatGPT Export</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#0d0d0d;color:#ececec;display:flex;height:100vh;overflow:hidden}
+.sidebar{width:260px;min-width:260px;height:100vh;background:#171717;display:flex;flex-direction:column;flex-shrink:0;border-right:1px solid #2a2a2a}
+.sidebar-top{padding:12px 12px 10px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #2a2a2a}
+.sidebar-title{font-size:15px;font-weight:600}
+.search-box{padding:8px 10px 4px}
+.search-box input{width:100%;padding:7px 10px;background:#202020;border:1px solid #3a3a3a;border-radius:8px;color:#ececec;font-size:13px;outline:none}
+.search-box input:focus{border-color:#555}
+.search-box input::placeholder{color:#6b6b6b}
+.sidebar-scroll{flex:1;overflow-y:auto;padding:4px 0 16px}
+.sidebar-scroll::-webkit-scrollbar{width:4px}
+.sidebar-scroll::-webkit-scrollbar-thumb{background:#3a3a3a;border-radius:2px}
+.nav-section{padding:8px 0 4px}
+.nav-section-hdr{font-size:12px;color:#8e8e8e;padding:6px 14px 4px;font-weight:500;letter-spacing:.02em}
+.nav-project{margin:0}
+.nav-proj-btn{display:flex;align-items:center;gap:8px;width:100%;padding:7px 10px 7px 14px;background:none;border:none;color:#adadad;font-size:14px;cursor:pointer;text-align:left;border-radius:8px;margin:1px 4px;width:calc(100% - 8px)}
+.nav-proj-btn:hover{background:#2a2a2a;color:#ececec}
+.folder-svg{flex-shrink:0;color:#8e8e8e}
+.nav-proj-btn span:nth-child(2){flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chevron{font-size:11px;color:#6b6b6b;transition:transform .15s;flex-shrink:0}
+.chevron.open{transform:rotate(90deg)}
+.nav-proj-items{padding-left:16px}
+.nav-item{display:block;padding:5px 10px 5px 14px;font-size:13px;color:#adadad;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:6px;margin:1px 4px}
+.nav-item:hover{background:#2a2a2a;color:#ececec}
+.nav-item.active{background:#2a2a2a;color:#ececec;font-weight:500}
+.hidden{display:none}
+.content{flex:1;height:100vh;border:none;background:#fff}
+.placeholder{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:#4a4a4a;font-size:14px}
+</style></head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-top">${LOGO}<span class="sidebar-title">ChatGPT Export</span></div>
+  <div class="search-box"><input id="search" type="text" placeholder="Search conversations..." oninput="filterNav(this.value)"></div>
+  <div class="sidebar-scroll" id="sidebar-scroll">
+    ${projectsHtml}
+    ${convosHtml}
+  </div>
+</nav>
+<div id="placeholder" class="placeholder">
+  ${LOGO.replace('width="20" height="20"', 'width="48" height="48" style="color:#3a3a3a"')}
+  <span>Select a conversation</span>
+</div>
+<iframe id="frame" class="content" style="display:none"></iframe>
+<script>
+function toggleProj(btn){
+  const items=btn.nextElementSibling;
+  const ch=btn.querySelector('.chevron');
+  items.classList.toggle('hidden');
+  ch.classList.toggle('open');
+}
+function filterNav(q){
+  const term=q.toLowerCase().trim();
+  document.querySelectorAll('.nav-item').forEach(a=>{
+    a.style.display=!term||a.textContent.toLowerCase().includes(term)?'':'none';
+  });
+  document.querySelectorAll('.nav-project').forEach(p=>{
+    const items=p.querySelector('.nav-proj-items');
+    const btn=p.querySelector('.nav-proj-btn');
+    const name=btn.querySelector('span:nth-child(2)').textContent.toLowerCase();
+    const visKids=[...items.querySelectorAll('.nav-item')].some(a=>a.style.display!=='none');
+    const nameMatch=term&&name.includes(term);
+    p.style.display=!term||visKids||nameMatch?'':'none';
+    if(term&&(visKids||nameMatch)){items.classList.remove('hidden');btn.querySelector('.chevron').classList.add('open');}
+    else if(!term){items.classList.add('hidden');btn.querySelector('.chevron').classList.remove('open');}
+  });
+  document.querySelectorAll('.nav-section').forEach(s=>{
+    const vis=[...s.querySelectorAll('.nav-item,.nav-project')].some(e=>e.style.display!=='none');
+    s.style.display=vis?'':'none';
+  });
+}
+function loadFrame(el,evt){
+  evt&&evt.preventDefault();
+  document.querySelectorAll('.nav-item').forEach(a=>a.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('placeholder').style.display='none';
+  const f=document.getElementById('frame');
+  f.style.display='block';
+  f.src=el.getAttribute('href');
+  location.hash=encodeURIComponent(el.getAttribute('href'));
+}
+// Auto-expand project containing the active conversation (via hash)
+function expandParentProject(link){
+  const items=link.closest('.nav-proj-items');
+  if(items){items.classList.remove('hidden');const ch=items.previousElementSibling?.querySelector('.chevron');if(ch)ch.classList.add('open');}
+}
+// Hash navigation
+if(location.hash){
+  const p=decodeURIComponent(location.hash.slice(1));
+  const link=document.querySelector('.nav-item[href="'+p.replace(/"/g,'\\"')+'"]');
+  if(link){expandParentProject(link);loadFrame(link);}
+}
+<\/script>
+</body></html>`;
+}
+
 // ── Export logic ─────────────────────────────────────────────────────
 
-async function runExport(token, outputDir, concurrency, createZip, keepAwake, sendEvent) {
+async function runExport(token, outputDir, concurrency, createZip, keepAwake, exportOptions, sendEvent) {
   // Prevent macOS sleep during export
+  // Kill any orphaned caffeinate from a previous run before starting a new one
+  if (global._caffeinate) { try { global._caffeinate.kill(); } catch {} global._caffeinate = null; }
   let caffeinate = null;
   if (keepAwake) {
-    try { caffeinate = spawn("caffeinate", ["-dims"], { stdio: "ignore" }); global._caffeinate = caffeinate; } catch { /* ignore */ }
+    try {
+      if (process.platform === "darwin") {
+        caffeinate = spawn("caffeinate", ["-dims"], { stdio: "ignore" });
+      } else if (process.platform === "win32") {
+        // Prevent sleep via SetThreadExecutionState (ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
+        caffeinate = spawn("powershell", ["-NoProfile", "-Command",
+          "$t=Add-Type -MemberDefinition '[DllImport(\"kernel32.dll\")] public static extern uint SetThreadExecutionState(uint s);' -Name KA -PassThru; while($true){$t::SetThreadExecutionState(0x80000003);Start-Sleep 59}"],
+          { stdio: "ignore", windowsHide: true });
+      } else if (process.platform === "linux") {
+        caffeinate = spawn("systemd-inhibit", ["--what=sleep:idle", "--who=chatgpt-exporter", "--why=Export running", "sleep", "86400"], { stdio: "ignore" });
+      }
+      if (caffeinate) global._caffeinate = caffeinate;
+    } catch { /* ignore — keep-awake is optional */ }
   }
   try {
     const CONCURRENCY = Math.max(1, Math.min(10, concurrency || 5));
+    const fmts        = { json: true, markdown: true, html: true, ...(exportOptions?.formats || {}) };
+    const doGpts      = exportOptions?.gpts          !== false;
+    const doProjs     = exportOptions?.projects      !== false;
+    const doConvs     = exportOptions?.conversations !== false;
+    const dateFromMs  = exportOptions?.dateFrom ? Date.parse(exportOptions.dateFrom)                         : 0;
+    const dateToMs    = exportOptions?.dateTo   ? Date.parse(exportOptions.dateTo + "T23:59:59.999Z") : Infinity;
     const rootDir     = outputDir.startsWith("~")
       ? join(homedir(), outputDir.slice(1))
       : outputDir;
@@ -564,153 +777,101 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, se
 
     // ── Export GPTs ──────────────────────────────────────────────────
     let gptCount = 0;
-    try {
-      sendEvent("status", "Fetching your GPTs...");
-      const gptsDir = join(rootDir, "gpts");
-      mkdirSync(gptsDir, { recursive: true });
-      let cursor = null;
-      while (true) {
-        const qs   = `limit=20${cursor ? "&cursor=" + encodeURIComponent(cursor) : ""}`;
-        const data = await fetch(`${API_BASE_PUB}/gizmos/discovery/mine?${qs}`, {
-          headers: { ...HEADERS, Authorization: `Bearer ${token}` },
-        }).then(async (r) => {
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          return r.json();
-        });
-        const items = data.list?.items || data.items || data.gizmos || (Array.isArray(data) ? data : []);
-        if (!items.length) break;
-        for (const item of items) {
-          const gizmo  = item.resource?.gizmo || item.gizmo || item;
-          const id     = gizmo.id || "";
-          const name   = gizmo.display?.name || gizmo.name || id;
-          const safe   = sanitizeFilename(name);
-          const fname  = `${safe}_${id.slice(0, 8)}`;
-          const mdPath = join(gptsDir, `${fname}.md`);
-          if (!existsSync(mdPath)) {
-            const mdStr = gptToMarkdown(gizmo);
-            writeFileSync(mdPath, mdStr, "utf8");
-            zipFiles.push({ path: `gpts/${fname}.md`, data: mdStr });
-          }
-          gptCount++;
-        }
-        cursor = data.list?.cursor || data.cursor || data.next_cursor || null;
-        if (!cursor) break;
-        await sleep(DELAY);
-      }
-      sendEvent("status", `Exported ${gptCount} GPT(s).`);
-      log(`GPT export done — ${gptCount} GPT(s)`);
-    } catch (e) {
-      log(`GPT export skipped: ${e.message}`);
-    }
-
-    // ── Fetch & export Projects ──────────────────────────────────────
-    // Projects are gizmos with ID prefix "g-p-", fetched from the sidebar endpoint
-    const allProjects = [];
-    try {
-      sendEvent("status", "Fetching projects...");
-      let cursor = null;
-      while (true) {
-        const qs   = `owned_only=true&conversations_per_gizmo=0&limit=20${cursor ? "&cursor=" + encodeURIComponent(cursor) : ""}`;
-        const data = await fetch(`${API_BASE}/gizmos/snorlax/sidebar?${qs}`, {
-          headers: { ...HEADERS, Authorization: `Bearer ${token}` },
-        }).then(async (r) => {
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          return r.json();
-        });
-        const items = data.list?.items || data.items || [];
-        if (!items.length) break;
-        for (const item of items) {
-          // Structure: item.gizmo = { gizmo: {id, display, ...}, files: [...], tools: [...], ... }
-          const wrapper = item.resource?.gizmo || item.gizmo || item;
-          const gizmo   = wrapper.gizmo || wrapper;
-          const gizmoId = gizmo.id || "";
-          if (!gizmoId.startsWith("g-p-")) continue; // projects only
-          const name  = gizmo.display?.name || gizmo.name || gizmoId;
-          const files = wrapper.files || [];
-          allProjects.push({ gizmoId, name, gizmo, files });
-        }
-        cursor = data.list?.cursor || data.cursor || null;
-        if (!cursor) break;
-        await sleep(DELAY);
-      }
-
-      for (const proj of allProjects) {
-        const projName = proj.name;
-        const projSafe = sanitizeFilename(projName);
-        const projDir  = join(rootDir, "projects", projSafe);
-        mkdirSync(projDir, { recursive: true });
-
-        // Project metadata from gizmo data
-        const infoMd = projectToMarkdown(proj.gizmo);
-        writeFileSync(join(projDir, "project-info.md"), infoMd, "utf8");
-        zipFiles.push({ path: `projects/${projSafe}/project-info.md`, data: infoMd });
-
-        // Project resources/files (included in sidebar response)
-        try {
-          const filesList = proj.files || [];
-          if (filesList.length) {
-            const resDir = join(projDir, "resources");
-            mkdirSync(resDir, { recursive: true });
-            for (const f of filesList) {
-              const rawId    = f.id || f.file_id || "";
-              // API requires file-id format; add prefix if missing
-              const fileId   = rawId.startsWith("file") ? rawId : `file-${rawId}`;
-              const fileName = f.name || f.filename || rawId;
-              try {
-                const debugOnce = filesList.indexOf(f) === 0 ? log : null;
-                const { buffer, filename: dlName } = await downloadFile(fileId, token, fileName, debugOnce);
-                const safe = sanitizeFilename(dlName || fileName);
-                writeFileSync(join(resDir, safe), buffer);
-                zipFiles.push({ path: `projects/${projSafe}/resources/${safe}`, data: buffer });
-                log(`PROJECT  "${projName}" resource: ${dlName || fileName}`);
-              } catch (e) { log(`PROJECT  "${projName}" file failed: ${e.message}`); }
+    if (doGpts) {
+      try {
+        sendEvent("status", "Fetching your GPTs...");
+        const gptsDir = join(rootDir, "gpts");
+        mkdirSync(gptsDir, { recursive: true });
+        let cursor = null;
+        while (true) {
+          const qs   = `limit=20${cursor ? "&cursor=" + encodeURIComponent(cursor) : ""}`;
+          const data = await fetch(`${API_BASE_PUB}/gizmos/discovery/mine?${qs}`, {
+            headers: { ...HEADERS, Authorization: `Bearer ${token}` },
+          }).then(async (r) => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+          });
+          const items = data.list?.items || data.items || data.gizmos || (Array.isArray(data) ? data : []);
+          if (!items.length) break;
+          for (const item of items) {
+            const gizmo  = item.resource?.gizmo || item.gizmo || item;
+            const id     = gizmo.id || "";
+            const name   = gizmo.display?.name || gizmo.name || id;
+            const safe   = sanitizeFilename(name);
+            const fname  = `${safe}_${id.slice(0, 8)}`;
+            const mdPath = join(gptsDir, `${fname}.md`);
+            if (!existsSync(mdPath)) {
+              const mdStr = gptToMarkdown(gizmo);
+              writeFileSync(mdPath, mdStr, "utf8");
+              zipFiles.push({ path: `gpts/${fname}.md`, data: mdStr });
             }
+            gptCount++;
           }
-        } catch { /* resources endpoint may not exist */ }
-
-        sendEvent("status", `Project: ${projName} — done`);
-        log(`PROJECT  "${projName}" exported`);
+          cursor = data.list?.cursor || data.cursor || data.next_cursor || null;
+          if (!cursor) break;
+          await sleep(DELAY);
+        }
+        sendEvent("status", `Exported ${gptCount} GPT(s).`);
+        log(`GPT export done — ${gptCount} GPT(s)`);
+      } catch (e) {
+        log(`GPT export skipped: ${e.message}`);
       }
-
-      if (allProjects.length) sendEvent("status", `Exported ${allProjects.length} project(s).`);
-    } catch (e) {
-      log(`Projects skipped: ${e.message}`);
     }
 
-    // ── Fetch conversations ──────────────────────────────────────────
-    sendEvent("status", "Fetching conversation list...");
-    let allConversations = [];
-
-    let offset = 0;
-    while (true) {
-      const data  = await apiGet(`conversations?offset=${offset}&limit=${PAGE_SIZE}`, token);
-      const items = data.items || [];
-      if (!items.length) break;
-      allConversations.push(...items.map((c) => ({ ...c, projectName: null })));
-      const total = data.total || 0;
-      sendEvent("status", `Fetching conversation list... ${allConversations.length}/${total}`);
-      offset += PAGE_SIZE;
-      if (offset >= total) break;
-      await sleep(DELAY);
+    // ── Fetch projects ────────────────────────────────────────────────
+    const allProjects = [];
+    if (doProjs) {
+      try {
+        sendEvent("status", "Fetching projects...");
+        let cursor = null;
+        while (true) {
+          const qs   = `owned_only=true&conversations_per_gizmo=0&limit=20${cursor ? "&cursor=" + encodeURIComponent(cursor) : ""}`;
+          const data = await fetch(`${API_BASE}/gizmos/snorlax/sidebar?${qs}`, {
+            headers: { ...HEADERS, Authorization: `Bearer ${token}` },
+          }).then(async (r) => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+          });
+          const items = data.list?.items || data.items || [];
+          if (!items.length) break;
+          for (const item of items) {
+            const wrapper = item.resource?.gizmo || item.gizmo || item;
+            const gizmo   = wrapper.gizmo || wrapper;
+            const gizmoId = gizmo.id || "";
+            if (!gizmoId.startsWith("g-p-")) continue;
+            const name  = gizmo.display?.name || gizmo.name || gizmoId;
+            const files = wrapper.files || [];
+            allProjects.push({ gizmoId, name, gizmo, files });
+          }
+          cursor = data.list?.cursor || data.cursor || null;
+          if (!cursor) break;
+          await sleep(DELAY);
+        }
+      } catch (e) {
+        log(`Projects fetch skipped: ${e.message}`);
+      }
     }
 
-    // ── Assign project conversations ─────────────────────────────────
-    // Uses gizmos/{gizmoId}/conversations with cursor pagination
-    if (allProjects.length) {
-      const seenIds = new Set(allConversations.map((c) => c.id));
+    // ── Map project conversation IDs → projectName ───────────────────
+    // Done before the main conversation fetch so projectName is assigned
+    // in a single pass (O(1) map lookup instead of O(n) find).
+    const projectConvMap   = new Map(); // convId → projectName
+    const projectConvExtra = [];        // convs only in project lists, not in main endpoint
+    if (doProjs && doConvs && allProjects.length) {
+      const seen = new Set();
       for (const proj of allProjects) {
         const projName = proj.name;
         sendEvent("status", `Fetching conversations for: ${projName}...`);
         let cur = null;
         while (true) {
           try {
-            const qs   = `limit=${PAGE_SIZE}${cur ? "&cursor=" + encodeURIComponent(cur) : ""}`;
+            const qs   = `limit=50${cur ? "&cursor=" + encodeURIComponent(cur) : ""}`;
             const data = await apiGet(`gizmos/${proj.gizmoId}/conversations?${qs}`, token);
-            const items = data.items || [];
+            const items = data.items || data.conversations || [];
             if (!items.length) break;
             for (const c of items) {
-              if (!seenIds.has(c.id)) { seenIds.add(c.id); allConversations.push({ ...c, projectName: projName }); }
-              else { const ex = allConversations.find((x) => x.id === c.id); if (ex) ex.projectName = projName; }
+              projectConvMap.set(c.id, projName);
+              if (!seen.has(c.id)) { seen.add(c.id); projectConvExtra.push({ ...c, projectName: projName }); }
             }
             cur = data.cursor || data.next_cursor || null;
             if (!cur) break;
@@ -720,189 +881,316 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, se
       }
     }
 
-    const total = allConversations.length;
-    if (total === 0) {
-      sendEvent("done", JSON.stringify({ total: 0, succeeded: 0, skipped: 0, failed: 0, output: rootDir }));
-      return;
-    }
-
-    sendEvent("status", `Found ${total} conversations. Starting download...`);
-
-    const jsonDir  = join(rootDir, "json");
-    const mdDir    = join(rootDir, "markdown");
-    const htmlDir  = join(rootDir, "html");
-    const filesDir = join(rootDir, "files");
-    mkdirSync(jsonDir,  { recursive: true });
-    mkdirSync(mdDir,    { recursive: true });
-    mkdirSync(htmlDir,  { recursive: true });
-    mkdirSync(filesDir, { recursive: true });
-
-    // Pre-compute conversation list per group so HTML sidebar is correct
-    // even when generating HTML inline during download.
-    const convosByGroup = {};
-    for (const item of allConversations) {
-      const key = item.projectName
-        ? `projects/${sanitizeFilename(item.projectName)}`
-        : "__root__";
-      if (!convosByGroup[key]) convosByGroup[key] = [];
-      const datePfxItem = safeDate(item.create_time) ? safeDate(item.create_time) + "_" : "";
-      const s = sanitizeFilename(item.title || "Untitled");
-      convosByGroup[key].push({ fname: `${datePfxItem}${s}_${item.id.slice(0, 8)}`, title: item.title || "Untitled" });
-    }
-
-    const failed     = [];
-    let totalFiles   = 0;
-    let failedFiles  = 0;
-    const failedFileDetails = [];
-    let newCount     = 0;
-    let skipped      = 0;
-    const startTime  = Date.now();
-
-    const sem = new Semaphore(CONCURRENCY);
-
-    const tasks = allConversations.map((item) => async () => {
-      await sem.acquire();
+    // ── Export project metadata + resources ──────────────────────────
+    if (doProjs) {
       try {
-        const { id: cid, title: rawTitle, projectName } = item;
-        const title    = rawTitle || "Untitled";
-        const safe     = sanitizeFilename(title);
-        const d        = safeDate(item.create_time);
-        const datePfx  = d ? d + "_" : "";
-        const fname    = `${datePfx}${safe}_${cid.slice(0, 8)}`;
-        const oldFname = `${safe}_${cid.slice(0, 8)}`; // pre-date format (backward compat)
+        for (const proj of allProjects) {
+          const projName = proj.name;
+          const projSafe = sanitizeFilename(projName);
+          const projDir  = join(rootDir, "projects", projSafe);
+          mkdirSync(projDir, { recursive: true });
 
-        const baseDirParts = projectName ? ["projects", sanitizeFilename(projectName)] : [];
-        const convJsonDir  = baseDirParts.length ? join(rootDir, ...baseDirParts, "json")     : jsonDir;
-        const convMdDir    = baseDirParts.length ? join(rootDir, ...baseDirParts, "markdown") : mdDir;
-        const convHtmlDir  = baseDirParts.length ? join(rootDir, ...baseDirParts, "html")     : htmlDir;
-        const convFilesDir = baseDirParts.length ? join(rootDir, ...baseDirParts, "files")    : filesDir;
-        const zipPrefix    = baseDirParts.length ? baseDirParts.join("/") + "/" : "";
+          const infoMd = projectToMarkdown(proj.gizmo);
+          writeFileSync(join(projDir, "project-info.md"), infoMd, "utf8");
+          zipFiles.push({ path: `projects/${projSafe}/project-info.md`, data: infoMd });
 
-        const jsonPath    = join(convJsonDir, `${fname}.json`);
-        const oldJsonPath = join(convJsonDir, `${oldFname}.json`);
-
-        // Helper: regenerate HTML if missing (uses existing JSON, no API call)
-        const ensureHtml = (convo, fName) => {
-          const htmlPath = join(convHtmlDir, `${fName}.html`);
-          if (!existsSync(htmlPath)) {
-            try {
-              const groupKey = baseDirParts.length ? baseDirParts.join("/") : "__root__";
-              mkdirSync(convHtmlDir, { recursive: true });
-              writeFileSync(htmlPath, conversationToHtml(convo, {}, convosByGroup[groupKey] || [], fName), "utf8");
-            } catch { /* non-fatal */ }
-          }
-        };
-
-        // Resume: new-format file exists
-        if (existsSync(jsonPath)) {
-          ensureHtml(JSON.parse(readFileSync(jsonPath, "utf8")), fname);
-          skipped++;
-          const done = newCount + skipped + failed.length;
-          if (skipped % 25 === 0 || done === total) {
-            const elapsed = (Date.now() - startTime) / 1000 / 60;
-            const rate    = elapsed > 0 ? Math.round(done / elapsed) : 0;
-            sendEvent("progress", JSON.stringify({
-              current: done, total, title,
-              stats: `${newCount} new · ${skipped} resumed · ${failed.length} failed · ${rate}/min`,
-            }));
-          }
-          return;
-        }
-
-        // Resume: old-format file exists — migrate to date-prefixed name, delete old files
-        if (existsSync(oldJsonPath)) {
           try {
-            const jsonStr = readFileSync(oldJsonPath, "utf8");
-            const convo   = JSON.parse(jsonStr);
+            const filesList = proj.files || [];
+            if (filesList.length) {
+              const resDir = join(projDir, "resources");
+              mkdirSync(resDir, { recursive: true });
+              for (const f of filesList) {
+                const rawId    = f.file_id || f.id || "";
+                const fileId   = rawId.startsWith("file") ? rawId : `file-${rawId}`;
+                const fileName = f.name || f.filename || rawId;
+                try {
+                  const { buffer, filename: dlName } = await downloadFile(fileId, token, fileName, null, proj.gizmoId);
+                  const safe = sanitizeFilename(dlName || fileName);
+                  writeFileSync(join(resDir, safe), buffer);
+                  zipFiles.push({ path: `projects/${projSafe}/resources/${safe}`, data: buffer });
+                  log(`PROJECT  "${projName}" resource: ${dlName || fileName}`);
+                } catch (e) { log(`PROJECT  "${projName}" file failed: ${e.message}`); }
+              }
+            }
+          } catch { /* resources may not exist */ }
+
+          log(`PROJECT  "${projName}" exported`);
+        }
+        if (allProjects.length) sendEvent("status", `Exported ${allProjects.length} project(s).`);
+      } catch (e) {
+        log(`Projects export skipped: ${e.message}`);
+      }
+    }
+
+    // ── Result accumulators ──────────────────────────────────────────
+    let total             = 0;
+    let newCount          = 0;
+    let skipped           = 0;
+    const failed          = [];
+    let totalFiles        = 0;
+    let failedFiles       = 0;
+    const failedFileDetails = [];
+
+    if (doConvs) {
+      // ── Fetch all conversations ────────────────────────────────────
+      sendEvent("status", "Fetching conversation list...");
+      let allConversations = [];
+
+      let offset = 0;
+      while (true) {
+        const data  = await apiGet(`conversations?offset=${offset}&limit=${PAGE_SIZE}`, token);
+        const items = data.items || [];
+        if (!items.length) break;
+        // Assign projectName in one pass using the pre-built map
+        allConversations.push(...items.map((c) => ({ ...c, projectName: projectConvMap.get(c.id) || null })));
+        const fetchTotal = data.total || 0;
+        sendEvent("status", `Fetching conversation list... ${allConversations.length}/${fetchTotal}`);
+        offset += PAGE_SIZE;
+        if (offset >= fetchTotal) break;
+        await sleep(DELAY);
+      }
+
+      // Add any project conversations not present in the main endpoint
+      if (projectConvExtra.length) {
+        const mainIds = new Set(allConversations.map((c) => c.id));
+        for (const c of projectConvExtra) {
+          if (!mainIds.has(c.id)) allConversations.push(c);
+        }
+      }
+
+      // ── Date filter ────────────────────────────────────────────────
+      if (dateFromMs > 0 || dateToMs < Infinity) {
+        const before = allConversations.length;
+        allConversations = allConversations.filter((c) => {
+          const ct = c.create_time;
+          const ms = typeof ct === "number" ? (ct > 1e10 ? ct : ct * 1000) : Date.parse(ct || 0);
+          return ms >= dateFromMs && ms <= dateToMs;
+        });
+        log(`Date filter [${exportOptions?.dateFrom || "*"} → ${exportOptions?.dateTo || "*"}]: ${before} → ${allConversations.length}`);
+        sendEvent("status", `Date filter: ${allConversations.length} conversations in range.`);
+      }
+
+      total = allConversations.length;
+
+      if (total > 0) {
+        sendEvent("status", `Found ${total} conversations. Starting download...`);
+
+        const jsonDir  = join(rootDir, "json");
+        const mdDir    = join(rootDir, "markdown");
+        const htmlDir  = join(rootDir, "html");
+        const filesDir = join(rootDir, "files");
+        mkdirSync(jsonDir,  { recursive: true });
+        if (fmts.markdown) mkdirSync(mdDir,    { recursive: true });
+        if (fmts.html)     mkdirSync(htmlDir,  { recursive: true });
+        mkdirSync(filesDir, { recursive: true });
+
+        // Pre-compute conversation list per group so HTML sidebar is correct
+        // even when generating HTML inline during download.
+        const convosByGroup = {};
+        for (const item of allConversations) {
+          const key = item.projectName
+            ? `projects/${sanitizeFilename(item.projectName)}`
+            : "__root__";
+          if (!convosByGroup[key]) convosByGroup[key] = [];
+          const datePfxItem = safeDate(item.create_time) ? safeDate(item.create_time) + "_" : "";
+          const s = sanitizeFilename(item.title || "Untitled");
+          convosByGroup[key].push({ fname: `${datePfxItem}${s}_${item.id.slice(0, 8)}`, title: item.title || "Untitled" });
+        }
+
+        const startTime = Date.now();
+        const sem = new Semaphore(CONCURRENCY);
+
+        const tasks = allConversations.map((item) => async () => {
+          await sem.acquire();
+          try {
+            const { id: cid, title: rawTitle, projectName } = item;
+            const title    = rawTitle || "Untitled";
+            const safe     = sanitizeFilename(title);
+            const d        = safeDate(item.create_time);
+            const datePfx  = d ? d + "_" : "";
+            const fname    = `${datePfx}${safe}_${cid.slice(0, 8)}`;
+            const oldFname = `${safe}_${cid.slice(0, 8)}`; // pre-date format (backward compat)
+
+            const baseDirParts = projectName ? ["projects", sanitizeFilename(projectName)] : [];
+            const convJsonDir  = baseDirParts.length ? join(rootDir, ...baseDirParts, "json")     : jsonDir;
+            const convMdDir    = baseDirParts.length ? join(rootDir, ...baseDirParts, "markdown") : mdDir;
+            const convHtmlDir  = baseDirParts.length ? join(rootDir, ...baseDirParts, "html")     : htmlDir;
+            const convFilesDir = baseDirParts.length ? join(rootDir, ...baseDirParts, "files")    : filesDir;
+            const zipPrefix    = baseDirParts.length ? baseDirParts.join("/") + "/" : "";
+
+            const jsonPath    = join(convJsonDir, `${fname}.json`);
+            const oldJsonPath = join(convJsonDir, `${oldFname}.json`);
+
+            // Helper: regenerate HTML if missing (uses existing JSON, no API call)
+            const ensureHtml = (convo, fName) => {
+              if (!fmts.html) return;
+              const htmlPath = join(convHtmlDir, `${fName}.html`);
+              if (!existsSync(htmlPath)) {
+                try {
+                  const groupKey = baseDirParts.length ? baseDirParts.join("/") : "__root__";
+                  mkdirSync(convHtmlDir, { recursive: true });
+                  writeFileSync(htmlPath, conversationToHtml(convo, {}, convosByGroup[groupKey] || [], fName), "utf8");
+                } catch { /* non-fatal */ }
+              }
+            };
+
+            // Resume: new-format file exists
+            if (existsSync(jsonPath)) {
+              ensureHtml(JSON.parse(readFileSync(jsonPath, "utf8")), fname);
+              skipped++;
+              const done = newCount + skipped + failed.length;
+              if (skipped % 25 === 0 || done === total) {
+                const elapsed = (Date.now() - startTime) / 1000 / 60;
+                const rate    = elapsed > 0 ? Math.round(done / elapsed) : 0;
+                sendEvent("progress", JSON.stringify({
+                  current: done, total, title,
+                  stats: `${newCount} new · ${skipped} resumed · ${failed.length} failed · ${rate}/min`,
+                }));
+              }
+              return;
+            }
+
+            // Resume: old-format file exists — migrate to date-prefixed name, delete old files
+            if (existsSync(oldJsonPath)) {
+              try {
+                const jsonStr = readFileSync(oldJsonPath, "utf8");
+                const convo   = JSON.parse(jsonStr);
+                mkdirSync(convJsonDir, { recursive: true });
+                writeFileSync(jsonPath, jsonStr, "utf8");
+                if (fmts.markdown) {
+                  mkdirSync(convMdDir, { recursive: true });
+                  writeFileSync(join(convMdDir, `${fname}.md`), conversationToMarkdown(convo, {}), "utf8");
+                }
+                ensureHtml(convo, fname);
+                // Remove old-format files (json, md, html) to avoid duplicates
+                try { unlinkSync(oldJsonPath); } catch {}
+                try { unlinkSync(join(convMdDir,    `${oldFname}.md`));   } catch {}
+                try { unlinkSync(join(convHtmlDir,  `${oldFname}.html`)); } catch {}
+              } catch { /* non-fatal — fall through to fresh download */ }
+              skipped++;
+              const done1 = newCount + skipped + failed.length;
+              if (skipped % 25 === 0 || done1 === total) {
+                const el1 = (Date.now() - startTime) / 1000 / 60;
+                const r1  = el1 > 0 ? Math.round(done1 / el1) : 0;
+                sendEvent("progress", JSON.stringify({
+                  current: done1, total, title,
+                  stats: `${newCount} new · ${skipped} resumed · ${failed.length} failed · ${r1}/min`,
+                }));
+              }
+              return;
+            }
+
+            // Resume: conversation was saved in root but now belongs to a project — migrate
+            if (projectName) {
+              const srcNew = join(jsonDir, `${fname}.json`);
+              const srcOld = join(jsonDir, `${oldFname}.json`);
+              const src    = existsSync(srcNew) ? srcNew : existsSync(srcOld) ? srcOld : null;
+              if (src) {
+                try {
+                  const jsonStr  = readFileSync(src, "utf8");
+                  const convo    = JSON.parse(jsonStr);
+                  const srcFname = src === srcNew ? fname : oldFname;
+                  mkdirSync(convJsonDir, { recursive: true });
+                  writeFileSync(jsonPath, jsonStr, "utf8");
+                  if (fmts.markdown) {
+                    mkdirSync(convMdDir, { recursive: true });
+                    writeFileSync(join(convMdDir, `${fname}.md`), conversationToMarkdown(convo, {}), "utf8");
+                  }
+                  ensureHtml(convo, fname);
+                  // Remove from root folder
+                  try { unlinkSync(src); } catch {}
+                  try { unlinkSync(join(mdDir,   `${srcFname}.md`));   } catch {}
+                  try { unlinkSync(join(htmlDir, `${srcFname}.html`)); } catch {}
+                  log(`MIGRATE  "${title}" root → projects/${sanitizeFilename(projectName)}/`);
+                } catch { /* non-fatal */ }
+                skipped++;
+                const done2 = newCount + skipped + failed.length;
+                if (skipped % 25 === 0 || done2 === total) {
+                  const el2 = (Date.now() - startTime) / 1000 / 60;
+                  const r2  = el2 > 0 ? Math.round(done2 / el2) : 0;
+                  sendEvent("progress", JSON.stringify({
+                    current: done2, total, title,
+                    stats: `${newCount} new · ${skipped} resumed · ${failed.length} failed · ${r2}/min`,
+                  }));
+                }
+                return;
+              }
+            }
+
+            const convo   = await apiGet(`conversation/${cid}`, token);
+            const jsonStr = JSON.stringify(convo, null, 2);
+
+            // Download attached files
+            const fileRefs  = extractFileReferences(convo);
+            const fileMap   = {};
+            const usedNames = new Set();
+
+            if (fileRefs.length) {
+              const convFilesDirFull = join(convFilesDir, fname);
+              mkdirSync(convFilesDirFull, { recursive: true });
+              for (const ref of fileRefs) {
+                totalFiles++;
+                try {
+                  const { filename: dlName, buffer } = await downloadFile(ref.fileId, token, ref.filename);
+                  const actualName = deduplicateFilename(dlName || ref.filename, usedNames);
+                  writeFileSync(join(convFilesDirFull, actualName), buffer);
+                  zipFiles.push({ path: `${zipPrefix}files/${fname}/${actualName}`, data: buffer });
+                  fileMap[ref.fileId] = `../files/${fname}/${actualName}`;
+                  await sleep(DELAY);
+                } catch (e) {
+                  failedFiles++;
+                  failedFileDetails.push(`${ref.filename} (${ref.fileId}): ${e.message}`);
+                }
+              }
+            }
+
+            // Write JSON (always — resume key + raw data)
             mkdirSync(convJsonDir, { recursive: true });
-            mkdirSync(convMdDir,   { recursive: true });
             writeFileSync(jsonPath, jsonStr, "utf8");
-            writeFileSync(join(convMdDir, `${fname}.md`), conversationToMarkdown(convo, {}), "utf8");
-            ensureHtml(convo, fname);
-            // Remove old-format files (json, md, html) to avoid duplicates
-            try { unlinkSync(oldJsonPath); } catch {}
-            try { unlinkSync(join(convMdDir,    `${oldFname}.md`));   } catch {}
-            try { unlinkSync(join(convHtmlDir,  `${oldFname}.html`)); } catch {}
-          } catch { /* non-fatal — fall through to fresh download */ }
-          skipped++;
-          const done = newCount + skipped + failed.length;
-          if (skipped % 25 === 0 || done === total) {
+            if (fmts.json) zipFiles.push({ path: `${zipPrefix}json/${fname}.json`, data: jsonStr });
+
+            // Write Markdown
+            if (fmts.markdown) {
+              const mdStr = conversationToMarkdown(convo, fileMap);
+              mkdirSync(convMdDir, { recursive: true });
+              writeFileSync(join(convMdDir, `${fname}.md`), mdStr, "utf8");
+              zipFiles.push({ path: `${zipPrefix}markdown/${fname}.md`, data: mdStr });
+            }
+
+            // Write HTML
+            if (fmts.html) {
+              try {
+                const groupKey = baseDirParts.length ? baseDirParts.join("/") : "__root__";
+                mkdirSync(convHtmlDir, { recursive: true });
+                const htmlStr = conversationToHtml(convo, fileMap, convosByGroup[groupKey] || [], fname);
+                writeFileSync(join(convHtmlDir, `${fname}.html`), htmlStr, "utf8");
+                zipFiles.push({ path: `${zipPrefix}html/${fname}.html`, data: htmlStr });
+              } catch { /* non-fatal */ }
+            }
+
+            newCount++;
+            const done    = newCount + skipped + failed.length;
             const elapsed = (Date.now() - startTime) / 1000 / 60;
             const rate    = elapsed > 0 ? Math.round(done / elapsed) : 0;
             sendEvent("progress", JSON.stringify({
               current: done, total, title,
               stats: `${newCount} new · ${skipped} resumed · ${failed.length} failed · ${rate}/min`,
             }));
+
+            await sleep(DELAY); // rate-limit only after an actual API call
+
+          } catch (e) {
+            failed.push(item.title || "Untitled");
+            console.error(`[error] "${item.title}": ${e.message}`);
+            log(`FAILED   "${item.title}": ${e.message}`);
+          } finally {
+            sem.release(); // no sleep here — skipped items must not be delayed
           }
-          return;
-        }
+        });
 
-        const convo   = await apiGet(`conversation/${cid}`, token);
-        const jsonStr = JSON.stringify(convo, null, 2);
-
-        // Download attached files
-        const fileRefs  = extractFileReferences(convo);
-        const fileMap   = {};
-        const usedNames = new Set();
-
-        if (fileRefs.length) {
-          const convFilesDirFull = join(convFilesDir, fname);
-          mkdirSync(convFilesDirFull, { recursive: true });
-          for (const ref of fileRefs) {
-            totalFiles++;
-            try {
-              const { filename: dlName, buffer } = await downloadFile(ref.fileId, token, ref.filename);
-              const actualName = deduplicateFilename(dlName || ref.filename, usedNames);
-              writeFileSync(join(convFilesDirFull, actualName), buffer);
-              zipFiles.push({ path: `${zipPrefix}files/${fname}/${actualName}`, data: buffer });
-              fileMap[ref.fileId] = `../files/${fname}/${actualName}`;
-              await sleep(DELAY);
-            } catch (e) {
-              failedFiles++;
-              failedFileDetails.push(`${ref.filename} (${ref.fileId}): ${e.message}`);
-            }
-          }
-        }
-
-        // Write JSON + Markdown (markdown computed once, reused for ZIP)
-        const mdStr = conversationToMarkdown(convo, fileMap);
-        mkdirSync(convJsonDir, { recursive: true });
-        mkdirSync(convMdDir,   { recursive: true });
-        writeFileSync(jsonPath, jsonStr, "utf8");
-        writeFileSync(join(convMdDir, `${fname}.md`), mdStr, "utf8");
-        zipFiles.push({ path: `${zipPrefix}json/${fname}.json`,     data: jsonStr });
-        zipFiles.push({ path: `${zipPrefix}markdown/${fname}.md`,   data: mdStr   });
-
-        // Write HTML inline using pre-computed sidebar list
-        try {
-          const groupKey = baseDirParts.length ? baseDirParts.join("/") : "__root__";
-          mkdirSync(convHtmlDir, { recursive: true });
-          const htmlStr = conversationToHtml(convo, fileMap, convosByGroup[groupKey] || [], fname);
-          writeFileSync(join(convHtmlDir, `${fname}.html`), htmlStr, "utf8");
-          zipFiles.push({ path: `${zipPrefix}html/${fname}.html`, data: htmlStr });
-        } catch { /* non-fatal */ }
-
-        newCount++;
-        const done    = newCount + skipped + failed.length;
-        const elapsed = (Date.now() - startTime) / 1000 / 60;
-        const rate    = elapsed > 0 ? Math.round(done / elapsed) : 0;
-        sendEvent("progress", JSON.stringify({
-          current: done, total, title,
-          stats: `${newCount} new · ${skipped} resumed · ${failed.length} failed · ${rate}/min`,
-        }));
-
-        await sleep(DELAY); // rate-limit only after an actual API call
-
-      } catch (e) {
-        failed.push(item.title || "Untitled");
-        console.error(`[error] "${item.title}": ${e.message}`);
-        log(`FAILED   "${item.title}": ${e.message}`);
-      } finally {
-        sem.release(); // no sleep here — skipped items must not be delayed
-      }
-    });
-
-    await Promise.all(tasks.map((t) => t()));
+        await Promise.all(tasks.map((t) => t()));
+      } // end if (total > 0)
+    } // end if (doConvs)
 
     // ── Build ZIP (optional) ─────────────────────────────────────────
     if (createZip) {
@@ -911,7 +1199,16 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, se
       writeFileSync(zipPath, zipBuf);
     }
 
-    const projectCount = Object.keys(convosByGroup).filter((k) => k !== "__root__").length;
+    // ── Generate root index.html (always — acts as re-index on resume) ─
+    if (fmts.html) {
+      try {
+        sendEvent("status", "Generating index.html...");
+        generateExportIndex(rootDir, allProjects);
+        log("INDEX    index.html written");
+      } catch (e) { log(`INDEX    failed: ${e.message}`); }
+    }
+
+    const projectCount = doProjs ? allProjects.length : 0;
     sendEvent("done", JSON.stringify({
       total,
       succeeded: newCount,
@@ -956,14 +1253,15 @@ const server = createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => {
-      let token, outputDir, concurrency, createZip, keepAwake;
+      let token, outputDir, concurrency, createZip, keepAwake, exportOptions;
       try {
         const parsed = JSON.parse(body);
-        token       = parsed.token;
-        outputDir   = parsed.outputDir   || join(homedir(), "Desktop", "chatgpt-export");
-        concurrency = parsed.concurrency || 5;
-        createZip   = parsed.createZip   ?? false;
-        keepAwake   = parsed.keepAwake   ?? true;
+        token         = parsed.token;
+        outputDir     = parsed.outputDir   || join(homedir(), "Desktop", "chatgpt-export");
+        concurrency   = parsed.concurrency || 5;
+        createZip     = parsed.createZip   ?? false;
+        keepAwake     = parsed.keepAwake   ?? true;
+        exportOptions = parsed.exportOptions || {};
       } catch {
         res.writeHead(400);
         res.end(JSON.stringify({ error: "Invalid JSON body" }));
@@ -998,7 +1296,7 @@ const server = createServer((req, res) => {
         }
       };
 
-      runExport(token, outputDir, concurrency, createZip, keepAwake, sendEvent).finally(() => {
+      runExport(token, outputDir, concurrency, createZip, keepAwake, exportOptions, sendEvent).finally(() => {
         const job = exportJobs.get(exportId);
         if (job) job.done = true;
       });
@@ -1032,7 +1330,7 @@ const server = createServer((req, res) => {
       }
     }, 200);
 
-    req.on("close", () => clearInterval(interval));
+    req.on("close", () => { clearInterval(interval); if (!res.writableEnded) res.end(); });
 
   // Folder picker (macOS only)
   } else if (req.method === "GET" && req.url === "/pick-folder") {
