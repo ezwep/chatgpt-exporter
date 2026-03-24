@@ -579,12 +579,18 @@ function generateExportIndex(rootDir, allProjects) {
 
   const projects = (allProjects || []).map((proj) => {
     const safe        = sanitizeFilename(proj.name);
-    const projHtmlDir = join(rootDir, "projects", safe, "html");
+    const projDir     = join(rootDir, "projects", safe);
+    const projHtmlDir = join(projDir, "html");
     const convos      = existsSync(projHtmlDir)
       ? readdirSync(projHtmlDir).filter((f) => f.endsWith(".html")).sort().reverse()
           .map((f) => ({ fname: f, title: extractHtmlTitle(join(projHtmlDir, f)) }))
       : [];
-    return { name: proj.name, safe, convos };
+    const resDir    = join(projDir, "resources");
+    const resources = existsSync(resDir)
+      ? readdirSync(resDir).filter((f) => !f.startsWith(".")).sort()
+      : [];
+    const hasInfo   = existsSync(join(projDir, "project-info.md"));
+    return { name: proj.name, safe, convos, resources, hasInfo };
   });
 
   writeFileSync(join(rootDir, "index.html"), buildExportIndexHtml(rootConvos, projects), "utf8");
@@ -604,6 +610,10 @@ function buildExportIndexHtml(rootConvos, projects) {
           <span class="chevron">▸</span>
         </button>
         <div class="nav-proj-items hidden">
+          ${p.hasInfo ? `<a class="nav-item nav-meta" href="projects/${encodeURIComponent(p.safe)}/project-info.md" onclick="loadText(this,event)">📋 Project info</a>` : ""}
+          ${p.resources.length ? `<div class="nav-sub-hdr">Resources</div>
+          ${p.resources.map((r) => `<a class="nav-item nav-resource" href="projects/${encodeURIComponent(p.safe)}/resources/${encodeURIComponent(r)}" target="_blank">📎 ${escapeHtml(r)}</a>`).join("\n          ")}` : ""}
+          ${p.convos.length ? `<div class="nav-sub-hdr">Conversations</div>` : ""}
           ${p.convos.map((c) => `<a class="nav-item" href="projects/${encodeURIComponent(p.safe)}/html/${encodeURIComponent(c.fname)}" onclick="loadFrame(this,event)">${escapeHtml(c.title)}</a>`).join("\n          ")}
         </div>
       </div>`).join("\n")}
@@ -642,6 +652,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .chevron{font-size:11px;color:#6b6b6b;transition:transform .15s;flex-shrink:0}
 .chevron.open{transform:rotate(90deg)}
 .nav-proj-items{padding-left:16px}
+.nav-sub-hdr{font-size:10px;color:#6b6b6b;padding:6px 14px 2px;text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+.nav-resource{font-size:12px;color:#8e8e8e}
+.nav-meta{font-size:12px;color:#8e8e8e;font-style:italic}
 .nav-item{display:block;padding:5px 10px 5px 14px;font-size:13px;color:#adadad;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:6px;margin:1px 4px}
 .nav-item:hover{background:#2a2a2a;color:#ececec}
 .nav-item.active{background:#2a2a2a;color:#ececec;font-weight:500}
@@ -675,6 +688,11 @@ function filterNav(q){
   document.querySelectorAll('.nav-item').forEach(a=>{
     a.style.display=!term||a.textContent.toLowerCase().includes(term)?'':'none';
   });
+  document.querySelectorAll('.nav-sub-hdr').forEach(h=>{
+    const next=[];let s=h.nextElementSibling;
+    while(s&&s.classList.contains('nav-item')){next.push(s);s=s.nextElementSibling;}
+    h.style.display=next.some(a=>a.style.display!=='none')?'':'none';
+  });
   document.querySelectorAll('.nav-project').forEach(p=>{
     const items=p.querySelector('.nav-proj-items');
     const btn=p.querySelector('.nav-proj-btn');
@@ -698,6 +716,19 @@ function loadFrame(el,evt){
   const f=document.getElementById('frame');
   f.style.display='block';
   f.src=el.getAttribute('href');
+  location.hash=encodeURIComponent(el.getAttribute('href'));
+}
+function loadText(el,evt){
+  evt&&evt.preventDefault();
+  document.querySelectorAll('.nav-item').forEach(a=>a.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('placeholder').style.display='none';
+  const f=document.getElementById('frame');
+  f.style.display='block';
+  fetch(el.getAttribute('href')).then(r=>r.text()).then(txt=>{
+    const html='<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#1a1a1a;color:#e0e0e0;padding:32px 48px;max-width:800px;line-height:1.6}h1,h2,h3{color:#fff;margin:1.2em 0 .4em}h1{font-size:22px;border-bottom:1px solid #333;padding-bottom:8px}h2{font-size:18px}pre{background:#111;padding:12px;border-radius:6px;overflow-x:auto;font-size:13px}code{background:#222;padding:2px 5px;border-radius:3px;font-size:13px}ul,ol{padding-left:24px}li{margin:4px 0}blockquote{border-left:3px solid #444;padding-left:16px;color:#aaa;margin:12px 0}</style></head><body><pre style="white-space:pre-wrap">'+txt.replace(/</g,"&lt;")+'</pre></body></html>';
+    f.srcdoc=html;
+  });
   location.hash=encodeURIComponent(el.getAttribute('href'));
 }
 // Auto-expand project containing the active conversation (via hash)
