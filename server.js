@@ -17,12 +17,13 @@ import { join, dirname }                      from "node:path";
 import { homedir }                            from "node:os";
 import { randomUUID }                         from "node:crypto";
 import { Buffer }                             from "node:buffer";
-import { execSync }                           from "node:child_process";
+import { execSync, spawn }                    from "node:child_process";
 import { fileURLToPath }                      from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const API_BASE   = "https://chatgpt.com/backend-api";
+const API_BASE      = "https://chatgpt.com/backend-api";
+const API_BASE_PUB  = "https://chatgpt.com/public-api";
 const PAGE_SIZE  = 100;
 const DELAY      = 100;   // ms between requests per slot (was 500ms)
 const HOST       = "127.0.0.1";
@@ -447,6 +448,29 @@ function buildZip(files) {
   return Buffer.concat(parts);
 }
 
+// ── Project markdown converter ───────────────────────────────────────
+
+function projectToMarkdown(proj) {
+  const name         = proj.display?.name        || proj.name        || proj.title || "Untitled Project";
+  const description  = proj.display?.description || proj.description || "";
+  const instructions = proj.instructions || proj.system_prompt || "";
+  const createdRaw   = proj.created_at;
+  let created = "";
+  if (createdRaw) {
+    try {
+      const d = typeof createdRaw === "number"
+        ? new Date(createdRaw > 1e10 ? createdRaw : createdRaw * 1000)
+        : new Date(createdRaw);
+      created = isNaN(d) ? "" : d.toISOString().slice(0, 10);
+    } catch { /* ignore */ }
+  }
+  let md = `# ${name}\n\n`;
+  if (description)  md += `**Description:** ${description}\n\n`;
+  if (created)      md += `**Created:** ${created}\n\n`;
+  if (instructions) md += `## Instructions\n\n${instructions}\n\n`;
+  return md;
+}
+
 // ── GPT markdown converter ────────────────────────────────────────────
 
 function gptToMarkdown(gizmo) {
@@ -455,9 +479,16 @@ function gptToMarkdown(gizmo) {
   const desc     = display.description || "";
   const starters = display.prompt_starters || [];
   const tools    = gizmo.tools || [];
-  const created  = gizmo.created_at
-    ? new Date(gizmo.created_at * 1000).toISOString().slice(0, 10)
-    : "";
+  const createdRaw = gizmo.created_at;
+  let created = "";
+  if (createdRaw) {
+    try {
+      const d = typeof createdRaw === "number"
+        ? new Date(createdRaw > 1e10 ? createdRaw : createdRaw * 1000)
+        : new Date(createdRaw);
+      created = isNaN(d) ? "" : d.toISOString().slice(0, 10);
+    } catch { /* ignore */ }
+  }
   const visibility = gizmo.visibility || display.visibility || "";
 
   let md = `# ${name}\n\n`;
@@ -486,7 +517,12 @@ function gptToMarkdown(gizmo) {
 
 // ── Export logic ─────────────────────────────────────────────────────
 
-async function runExport(token, outputDir, concurrency, sendEvent) {
+async function runExport(token, outputDir, concurrency, createZip, keepAwake, sendEvent) {
+  // Prevent macOS sleep during export
+  let caffeinate = null;
+  if (keepAwake) {
+    try { caffeinate = spawn("caffeinate", ["-dims"], { stdio: "ignore" }); } catch { /* ignore */ }
+  }
   try {
     const CONCURRENCY = Math.max(1, Math.min(10, concurrency || 5));
     const rootDir     = outputDir.startsWith("~")
@@ -496,8 +532,10 @@ async function runExport(token, outputDir, concurrency, sendEvent) {
 
     // ── Logging setup ─────────────────────────────────────────────────
     mkdirSync(rootDir, { recursive: true });
+    const logsDir = join(rootDir, "logs");
+    mkdirSync(logsDir, { recursive: true });
     const logTs   = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const logPath = join(rootDir, `export-${logTs}.log`);
+    const logPath = join(logsDir, `export-${logTs}.log`);
     const log = (msg) => appendFileSync(logPath, `[${new Date().toISOString()}] ${msg}\n`, "utf8");
 
     log(`Export started — output: ${rootDir} — concurrency: ${CONCURRENCY}`);
@@ -510,6 +548,118 @@ async function runExport(token, outputDir, concurrency, sendEvent) {
       else if (type === "done")     { const d = JSON.parse(data); log(`DONE     ${d.succeeded} new · ${d.skipped} resumed · ${d.failed} failed · output: ${d.output}`); }
       else if (type === "error_msg") log(`ERROR    ${data}`);
     };
+
+    const zipFiles = [];
+
+    // ── Export GPTs ──────────────────────────────────────────────────
+    let gptCount = 0;
+    try {
+      sendEvent("status", "Fetching your GPTs...");
+      const gptsDir = join(rootDir, "gpts");
+      mkdirSync(gptsDir, { recursive: true });
+      let cursor = null;
+      while (true) {
+        const qs   = `limit=20${cursor ? "&cursor=" + encodeURIComponent(cursor) : ""}`;
+        const data = await fetch(`${API_BASE_PUB}/gizmos/discovery/mine?${qs}`, {
+          headers: { ...HEADERS, Authorization: `Bearer ${token}` },
+        }).then(async (r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.json();
+        });
+        const items = data.list?.items || data.items || data.gizmos || (Array.isArray(data) ? data : []);
+        if (!items.length) break;
+        for (const item of items) {
+          const gizmo  = item.resource?.gizmo || item.gizmo || item;
+          const id     = gizmo.id || "";
+          const name   = gizmo.display?.name || gizmo.name || id;
+          const safe   = sanitizeFilename(name);
+          const fname  = `${safe}_${id.slice(0, 8)}`;
+          const mdPath = join(gptsDir, `${fname}.md`);
+          if (!existsSync(mdPath)) {
+            const mdStr = gptToMarkdown(gizmo);
+            writeFileSync(mdPath, mdStr, "utf8");
+            zipFiles.push({ path: `gpts/${fname}.md`, data: mdStr });
+          }
+          gptCount++;
+        }
+        cursor = data.list?.cursor || data.cursor || data.next_cursor || null;
+        if (!cursor) break;
+        await sleep(DELAY);
+      }
+      sendEvent("status", `Exported ${gptCount} GPT(s).`);
+      log(`GPT export done — ${gptCount} GPT(s)`);
+    } catch (e) {
+      log(`GPT export skipped: ${e.message}`);
+    }
+
+    // ── Fetch & export Projects ──────────────────────────────────────
+    // Projects are gizmos with ID prefix "g-p-", fetched from the sidebar endpoint
+    const allProjects = [];
+    try {
+      sendEvent("status", "Fetching projects...");
+      let cursor = null;
+      while (true) {
+        const qs   = `owned_only=true&conversations_per_gizmo=0&limit=20${cursor ? "&cursor=" + encodeURIComponent(cursor) : ""}`;
+        const data = await fetch(`${API_BASE}/gizmos/snorlax/sidebar?${qs}`, {
+          headers: { ...HEADERS, Authorization: `Bearer ${token}` },
+        }).then(async (r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.json();
+        });
+        const items = data.list?.items || data.items || [];
+        if (!items.length) break;
+        for (const item of items) {
+          const gizmo   = item.resource?.gizmo || item.gizmo || item;
+          const gizmoId = gizmo.id || "";
+          if (!gizmoId.startsWith("g-p-")) continue; // projects only
+          const name = gizmo.display?.name || gizmo.name || gizmoId;
+          allProjects.push({ gizmoId, name, gizmo });
+        }
+        cursor = data.list?.cursor || data.cursor || null;
+        if (!cursor) break;
+        await sleep(DELAY);
+      }
+
+      for (const proj of allProjects) {
+        const projName = proj.name;
+        const projSafe = sanitizeFilename(projName);
+        const projDir  = join(rootDir, "projects", projSafe);
+        mkdirSync(projDir, { recursive: true });
+
+        // Project metadata from gizmo data
+        const infoMd = projectToMarkdown(proj.gizmo);
+        writeFileSync(join(projDir, "project-info.md"), infoMd, "utf8");
+        zipFiles.push({ path: `projects/${projSafe}/project-info.md`, data: infoMd });
+
+        // Project resources/files
+        try {
+          const filesData = await apiGet(`gizmos/${proj.gizmoId}/files`, token);
+          const filesList = filesData.files || filesData.items || [];
+          if (filesList.length) {
+            const resDir = join(projDir, "resources");
+            mkdirSync(resDir, { recursive: true });
+            for (const f of filesList) {
+              const fileId   = f.id || f.file_id;
+              const fileName = f.name || f.filename || fileId;
+              try {
+                const { buffer } = await downloadFile(fileId, token, fileName);
+                const safe = sanitizeFilename(fileName);
+                writeFileSync(join(resDir, safe), buffer);
+                zipFiles.push({ path: `projects/${projSafe}/resources/${safe}`, data: buffer });
+                log(`PROJECT  "${projName}" resource: ${fileName}`);
+              } catch (e) { log(`PROJECT  "${projName}" file failed: ${e.message}`); }
+            }
+          }
+        } catch { /* resources endpoint may not exist */ }
+
+        sendEvent("status", `Project: ${projName} — done`);
+        log(`PROJECT  "${projName}" exported`);
+      }
+
+      if (allProjects.length) sendEvent("status", `Exported ${allProjects.length} project(s).`);
+    } catch (e) {
+      log(`Projects skipped: ${e.message}`);
+    }
 
     // ── Fetch conversations ──────────────────────────────────────────
     sendEvent("status", "Fetching conversation list...");
@@ -528,47 +678,30 @@ async function runExport(token, outputDir, concurrency, sendEvent) {
       await sleep(DELAY);
     }
 
-    // ── Fetch projects ───────────────────────────────────────────────
-    try {
-      sendEvent("status", "Fetching projects...");
-      let projOffset = 0;
-      const allProjects = [];
-      while (true) {
-        const data  = await apiGet(`projects?offset=${projOffset}&limit=50`, token);
-        const items = data.projects || data.items || (Array.isArray(data) ? data : []);
-        if (!items.length) break;
-        allProjects.push(...items);
-        projOffset += items.length;
-        if (!data.has_more && !data.next) break;
-        await sleep(DELAY);
-      }
-
+    // ── Assign project conversations ─────────────────────────────────
+    // Uses gizmos/{gizmoId}/conversations with cursor pagination
+    if (allProjects.length) {
       const seenIds = new Set(allConversations.map((c) => c.id));
       for (const proj of allProjects) {
-        const projName = proj.name || proj.title || proj.id;
-        sendEvent("status", `Fetching project: ${projName}...`);
-        let off = 0;
+        const projName = proj.name;
+        sendEvent("status", `Fetching conversations for: ${projName}...`);
+        let cur = null;
         while (true) {
-          const data  = await apiGet(`projects/${proj.id}/conversations?offset=${off}&limit=${PAGE_SIZE}`, token);
-          const items = data.items || [];
-          if (!items.length) break;
-          for (const c of items) {
-            if (!seenIds.has(c.id)) {
-              seenIds.add(c.id);
-              allConversations.push({ ...c, projectName: projName });
-            } else {
-              const ex = allConversations.find((x) => x.id === c.id);
-              if (ex) ex.projectName = projName;
+          try {
+            const qs   = `limit=${PAGE_SIZE}${cur ? "&cursor=" + encodeURIComponent(cur) : ""}`;
+            const data = await apiGet(`gizmos/${proj.gizmoId}/conversations?${qs}`, token);
+            const items = data.items || [];
+            if (!items.length) break;
+            for (const c of items) {
+              if (!seenIds.has(c.id)) { seenIds.add(c.id); allConversations.push({ ...c, projectName: projName }); }
+              else { const ex = allConversations.find((x) => x.id === c.id); if (ex) ex.projectName = projName; }
             }
-          }
-          const total = data.total || items.length;
-          off += PAGE_SIZE;
-          if (off >= total) break;
-          await sleep(DELAY);
+            cur = data.cursor || data.next_cursor || null;
+            if (!cur) break;
+            await sleep(DELAY);
+          } catch { break; }
         }
       }
-    } catch {
-      // Projects endpoint may not exist — continue without it
     }
 
     const total = allConversations.length;
@@ -600,7 +733,6 @@ async function runExport(token, outputDir, concurrency, sendEvent) {
       convosByGroup[key].push({ fname: `${s}_${item.id.slice(0, 8)}`, title: item.title || "Untitled" });
     }
 
-    const zipFiles   = [];
     const failed     = [];
     let totalFiles   = 0;
     let failedFiles  = 0;
@@ -711,46 +843,12 @@ async function runExport(token, outputDir, concurrency, sendEvent) {
 
     await Promise.all(tasks.map((t) => t()));
 
-    // ── Export GPTs ──────────────────────────────────────────────────
-    let gptCount = 0;
-    try {
-      sendEvent("status", "Fetching your GPTs...");
-      const gptsDir = join(rootDir, "gpts");
-      mkdirSync(gptsDir, { recursive: true });
-      let cursor = null;
-      while (true) {
-        const qs   = cursor ? `?cursor=${encodeURIComponent(cursor)}&limit=50` : "?limit=50";
-        const data = await apiGet(`gizmos/discovery/mine${qs}`, token);
-        const items = data.items || data.gizmos || [];
-        if (!items.length) break;
-        for (const item of items) {
-          const gizmo  = item.gizmo || item;
-          const id     = gizmo.id || "";
-          const name   = gizmo.display?.name || gizmo.name || id;
-          const safe   = sanitizeFilename(name);
-          const fname  = `${safe}_${id.slice(0, 8)}`;
-          const mdPath = join(gptsDir, `${fname}.md`);
-          if (!existsSync(mdPath)) {
-            const mdStr = gptToMarkdown(gizmo);
-            writeFileSync(mdPath, mdStr, "utf8");
-            zipFiles.push({ path: `gpts/${fname}.md`, data: mdStr });
-          }
-          gptCount++;
-        }
-        cursor = data.cursor || data.next_cursor || null;
-        if (!cursor) break;
-        await sleep(DELAY);
-      }
-      sendEvent("status", `Exported ${gptCount} GPT(s).`);
-      log(`GPT export done — ${gptCount} GPT(s)`);
-    } catch (e) {
-      log(`GPT export skipped: ${e.message}`);
+    // ── Build ZIP (optional) ─────────────────────────────────────────
+    if (createZip) {
+      sendEvent("status", "Creating ZIP archive...");
+      const zipBuf = buildZip(zipFiles);
+      writeFileSync(zipPath, zipBuf);
     }
-
-    // ── Build ZIP ────────────────────────────────────────────────────
-    sendEvent("status", "Creating ZIP archive...");
-    const zipBuf = buildZip(zipFiles);
-    writeFileSync(zipPath, zipBuf);
 
     const projectCount = Object.keys(convosByGroup).filter((k) => k !== "__root__").length;
     sendEvent("done", JSON.stringify({
@@ -760,7 +858,7 @@ async function runExport(token, outputDir, concurrency, sendEvent) {
       failed: failed.length,
       failedTitles: failed,
       output: rootDir,
-      zip: zipPath,
+      zip: createZip ? zipPath : null,
       totalFiles,
       failedFiles,
       failedFileDetails,
@@ -770,6 +868,8 @@ async function runExport(token, outputDir, concurrency, sendEvent) {
 
   } catch (e) {
     sendEvent("error_msg", `Export failed: ${e.message}`);
+  } finally {
+    if (caffeinate) try { caffeinate.kill(); } catch { /* ignore */ }
   }
 }
 
@@ -795,12 +895,14 @@ const server = createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => {
-      let token, outputDir, concurrency;
+      let token, outputDir, concurrency, createZip, keepAwake;
       try {
         const parsed = JSON.parse(body);
         token       = parsed.token;
         outputDir   = parsed.outputDir   || join(homedir(), "Desktop", "chatgpt-export");
         concurrency = parsed.concurrency || 5;
+        createZip   = parsed.createZip   ?? false;
+        keepAwake   = parsed.keepAwake   ?? true;
       } catch {
         res.writeHead(400);
         res.end(JSON.stringify({ error: "Invalid JSON body" }));
@@ -835,7 +937,7 @@ const server = createServer((req, res) => {
         }
       };
 
-      runExport(token, outputDir, concurrency, sendEvent).finally(() => {
+      runExport(token, outputDir, concurrency, createZip, keepAwake, sendEvent).finally(() => {
         const job = exportJobs.get(exportId);
         if (job) job.done = true;
       });

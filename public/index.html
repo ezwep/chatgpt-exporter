@@ -82,6 +82,20 @@
   .result code { font-size: 12px; word-break: break-all; }
   .result.success { background: #14532d; color: #bbf7d0; }
   .result.error   { background: #7f1d1d; color: #fecaca; }
+  .toggle-row { display: flex; align-items: center; gap: 10px; margin: 0 0 16px; }
+  .toggle { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute; inset: 0; background: #334155; border-radius: 22px;
+    cursor: pointer; transition: background 0.2s;
+  }
+  .slider::before {
+    content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%;
+    background: #fff; left: 3px; top: 3px; transition: transform 0.2s;
+  }
+  .toggle input:checked + .slider { background: #3b82f6; }
+  .toggle input:checked + .slider::before { transform: translateX(18px); }
+  .toggle-label { font-size: 14px; color: #94a3b8; cursor: pointer; user-select: none; }
   .hidden { display: none; }
 </style>
 </head>
@@ -128,6 +142,22 @@
     </select>
   </div>
 
+  <div class="toggle-row">
+    <label class="toggle">
+      <input type="checkbox" id="keep-awake" checked>
+      <span class="slider"></span>
+    </label>
+    <span class="toggle-label">Keep Mac awake during export</span>
+  </div>
+
+  <div class="toggle-row">
+    <label class="toggle">
+      <input type="checkbox" id="create-zip">
+      <span class="slider"></span>
+    </label>
+    <span class="toggle-label">Create ZIP archive</span>
+  </div>
+
   <button id="export-btn" onclick="startExport()">Export conversations</button>
 
   <div id="progress-section" class="progress-section hidden">
@@ -163,13 +193,16 @@
 
   // Restore saved values
   const saved = JSON.parse(localStorage.getItem('cge_prefs') || '{}');
-  if (saved.outputDir)   document.getElementById('output-dir').value = saved.outputDir;
-  if (saved.concurrency) document.getElementById('concurrency').value = saved.concurrency;
+  if (saved.outputDir)              document.getElementById('output-dir').value  = saved.outputDir;
+  if (saved.concurrency)            document.getElementById('concurrency').value  = saved.concurrency;
+  if (saved.keepAwake !== undefined) document.getElementById('keep-awake').checked = saved.keepAwake;
 
   function startExport() {
     const raw         = document.getElementById('token-input').value.trim();
     const outputDir   = document.getElementById('output-dir').value.trim() || '~/Desktop/chatgpt-export';
     const concurrency = parseInt(document.getElementById('concurrency').value, 10);
+    const createZip   = document.getElementById('create-zip').checked;
+    const keepAwake   = document.getElementById('keep-awake').checked;
 
     if (!raw) return alert('Please paste the session JSON first.');
 
@@ -181,7 +214,7 @@
     if (!token) return alert('No "accessToken" found. Make sure you are logged in and copied the full page.');
 
     // Save preferences
-    localStorage.setItem('cge_prefs', JSON.stringify({ outputDir, concurrency }));
+    localStorage.setItem('cge_prefs', JSON.stringify({ outputDir, concurrency, keepAwake }));
 
     document.getElementById('export-btn').disabled      = true;
     document.getElementById('token-input').disabled     = true;
@@ -198,7 +231,7 @@
     fetch('/start-export', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, outputDir, concurrency }),
+      body: JSON.stringify({ token, outputDir, concurrency, createZip, keepAwake }),
     })
       .then(r => r.json())
       .then(data => {
