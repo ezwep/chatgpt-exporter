@@ -1,0 +1,9 @@
+{
+  "name": "chatgpt-exporter",
+  "version": "2.0.0",
+  "description": "ChatGPT conversation exporter — terminal server met web UI",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

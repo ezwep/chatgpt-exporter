@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChatGPT Exporter</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f172a; color: #e2e8f0;
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  }
+  .card {
+    background: #1e293b; border-radius: 16px; padding: 40px;
+    max-width: 580px; width: 100%; box-shadow: 0 25px 50px rgba(0,0,0,0.4);
+    margin: 24px;
+  }
+  h1 { font-size: 24px; margin-bottom: 8px; color: #f8fafc; }
+  .subtitle { color: #94a3b8; margin-bottom: 32px; font-size: 14px; }
+  .step { display: flex; gap: 12px; margin-bottom: 20px; }
+  .step-num {
+    flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%;
+    background: #3b82f6; color: #fff; display: flex; align-items: center;
+    justify-content: center; font-size: 13px; font-weight: 600;
+  }
+  .step-num.done { background: #22c55e; }
+  .step-text { font-size: 14px; line-height: 1.6; padding-top: 3px; }
+  .step-text a { color: #60a5fa; text-decoration: none; }
+  .step-text a:hover { text-decoration: underline; }
+  kbd {
+    background: #334155; border-radius: 4px; padding: 2px 6px;
+    font-family: inherit; font-size: 12px; border: 1px solid #475569;
+  }
+  .field { margin: 16px 0 0; }
+  .field label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 6px; }
+  .field input {
+    width: 100%; background: #0f172a; border: 2px solid #334155;
+    border-radius: 8px; color: #e2e8f0; padding: 10px 12px;
+    font-size: 13px; outline: none; transition: border-color 0.2s;
+  }
+  .field input:focus { border-color: #3b82f6; }
+  .field-row { display: flex; gap: 8px; align-items: stretch; }
+  .field-row input { flex: 1; min-width: 0; width: auto; }
+  .btn-browse {
+    flex-shrink: 0; width: auto; background: #334155; border: 2px solid #475569;
+    border-radius: 8px; color: #cbd5e1; font-size: 13px; font-weight: 500;
+    padding: 0 16px; cursor: pointer; white-space: nowrap;
+    transition: background 0.2s, color 0.2s;
+  }
+  .btn-browse:hover { background: #475569; color: #f1f5f9; }
+  textarea {
+    width: 100%; height: 100px; background: #0f172a; border: 2px solid #334155;
+    border-radius: 8px; color: #e2e8f0; padding: 12px; font-family: monospace;
+    font-size: 13px; resize: vertical; margin: 16px 0;
+  }
+  textarea:focus { outline: none; border-color: #3b82f6; }
+  textarea::placeholder { color: #64748b; }
+  button {
+    width: 100%; padding: 12px; border: none; border-radius: 8px;
+    background: #3b82f6; color: #fff; font-size: 15px; font-weight: 600;
+    cursor: pointer; transition: background 0.2s;
+  }
+  button:hover { background: #2563eb; }
+  button:disabled { background: #475569; cursor: not-allowed; }
+  .progress-section { margin-top: 24px; }
+  .progress-bar-bg {
+    width: 100%; height: 8px; background: #334155; border-radius: 4px;
+    overflow: hidden; margin: 12px 0;
+  }
+  .progress-bar {
+    height: 100%; background: #3b82f6; border-radius: 4px;
+    transition: width 0.3s ease; width: 0%;
+  }
+  .progress-text { font-size: 13px; color: #94a3b8; }
+  .current-title {
+    font-size: 13px; color: #64748b; margin-top: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .stats-row { font-size: 12px; color: #475569; margin-top: 4px; }
+  .result { margin-top: 20px; padding: 16px; border-radius: 8px; font-size: 14px; line-height: 1.6; }
+  .result code { font-size: 12px; word-break: break-all; }
+  .result.success { background: #14532d; color: #bbf7d0; }
+  .result.error   { background: #7f1d1d; color: #fecaca; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>ChatGPT Exporter</h1>
+  <p class="subtitle">Export all your conversations as JSON, Markdown &amp; HTML — with resume &amp; projects support</p>
+
+  <div id="steps">
+    <div class="step">
+      <div class="step-num" id="step1-num">1</div>
+      <div class="step-text">
+        Open <a href="https://chatgpt.com/api/auth/session" target="_blank">chatgpt.com/api/auth/session</a> in a new tab.<br>
+        <span style="color:#94a3b8">(If you see a login page, log in first, then open the link again.)</span>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num" id="step2-num">2</div>
+      <div class="step-text">
+        Select all the text on that page (<kbd>Cmd+A</kbd>),
+        copy it (<kbd>Cmd+C</kbd>), and paste it below.
+      </div>
+    </div>
+  </div>
+
+  <textarea id="token-input" placeholder='Paste the session JSON here — it looks like {"user":{...},"accessToken":"eyJhbG..."}'></textarea>
+
+  <div class="field">
+    <label for="output-dir">Output folder</label>
+    <div class="field-row">
+      <input type="text" id="output-dir" placeholder="~/Desktop/chatgpt-export" value="~/Desktop/chatgpt-export">
+      <button class="btn-browse" onclick="pickFolder()">📁 Browse</button>
+    </div>
+  </div>
+
+  <div class="field" style="margin-bottom:16px">
+    <label for="concurrency">Parallel downloads</label>
+    <select id="concurrency" style="width:100%;background:#0f172a;border:2px solid #334155;border-radius:8px;color:#e2e8f0;padding:10px 12px;font-size:13px;outline:none;margin-top:0">
+      <option value="1">1 — slow</option>
+      <option value="3">3 — normal</option>
+      <option value="5" selected>5 — fast (default)</option>
+      <option value="8">8 — aggressive</option>
+      <option value="10">10 — maximum</option>
+    </select>
+  </div>
+
+  <button id="export-btn" onclick="startExport()">Export conversations</button>
+
+  <div id="progress-section" class="progress-section hidden">
+    <div class="progress-bar-bg"><div class="progress-bar" id="progress-bar"></div></div>
+    <div class="progress-text"  id="progress-text">Starting...</div>
+    <div class="current-title" id="current-title"></div>
+    <div class="stats-row"     id="stats-row"></div>
+  </div>
+
+  <div id="result" class="result hidden"></div>
+</div>
+
+<script>
+  const isMac = navigator.platform.toUpperCase().includes('MAC');
+  if (!isMac) {
+    document.querySelectorAll('kbd').forEach(el => {
+      el.textContent = el.textContent.replace('Cmd', 'Ctrl');
+    });
+  }
+
+  async function pickFolder() {
+    const resp = await fetch('/pick-folder').catch(() => null);
+    if (!resp || !resp.ok) return;
+    const { path } = await resp.json();
+    if (path) {
+      document.getElementById('output-dir').value = path.replace(/\/$/, '');
+      localStorage.setItem('cge_prefs', JSON.stringify({
+        outputDir: path.replace(/\/$/, ''),
+        concurrency: document.getElementById('concurrency').value,
+      }));
+    }
+  }
+
+  // Restore saved values
+  const saved = JSON.parse(localStorage.getItem('cge_prefs') || '{}');
+  if (saved.outputDir)   document.getElementById('output-dir').value = saved.outputDir;
+  if (saved.concurrency) document.getElementById('concurrency').value = saved.concurrency;
+
+  function startExport() {
+    const raw         = document.getElementById('token-input').value.trim();
+    const outputDir   = document.getElementById('output-dir').value.trim() || '~/Desktop/chatgpt-export';
+    const concurrency = parseInt(document.getElementById('concurrency').value, 10);
+
+    if (!raw) return alert('Please paste the session JSON first.');
+
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch {
+      return alert('Invalid JSON. Make sure you copied the entire page content.');
+    }
+    const token = parsed.accessToken;
+    if (!token) return alert('No "accessToken" found. Make sure you are logged in and copied the full page.');
+
+    // Save preferences
+    localStorage.setItem('cge_prefs', JSON.stringify({ outputDir, concurrency }));
+
+    document.getElementById('export-btn').disabled      = true;
+    document.getElementById('token-input').disabled     = true;
+    document.getElementById('progress-section').classList.remove('hidden');
+    document.getElementById('result').classList.add('hidden');
+    document.getElementById('stats-row').textContent    = '';
+    document.getElementById('progress-bar').style.width = '0%';
+    document.getElementById('progress-bar').style.background = '#3b82f6';
+    document.getElementById('step1-num').classList.add('done');
+    document.getElementById('step1-num').textContent = '✓';
+    document.getElementById('step2-num').classList.add('done');
+    document.getElementById('step2-num').textContent = '✓';
+
+    fetch('/start-export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, outputDir, concurrency }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) { showResult('error', data.error); resetUI(); return; }
+
+        const evtSource = new EventSource('/progress/' + data.exportId);
+
+        evtSource.addEventListener('status', (e) => {
+          document.getElementById('progress-text').textContent = e.data;
+        });
+
+        evtSource.addEventListener('progress', (e) => {
+          const d   = JSON.parse(e.data);
+          const pct = Math.round((d.current / d.total) * 100);
+          document.getElementById('progress-bar').style.width = pct + '%';
+          document.getElementById('progress-text').textContent =
+            'Downloading ' + d.current + ' of ' + d.total + ' (' + pct + '%)';
+          document.getElementById('current-title').textContent = d.title || '';
+          if (d.stats) document.getElementById('stats-row').textContent = d.stats;
+        });
+
+        evtSource.addEventListener('error_msg', (e) => {
+          evtSource.close();
+          showResult('error', e.data);
+          resetUI();
+        });
+
+        evtSource.addEventListener('done', (e) => {
+          evtSource.close();
+          const d = JSON.parse(e.data);
+          document.getElementById('progress-bar').style.width     = '100%';
+          document.getElementById('progress-bar').style.background = '#22c55e';
+
+          if (d.total === 0) {
+            showResult('success', 'No conversations found in your account.');
+          } else {
+            let msg = 'Done! ' + d.succeeded + ' new · ' + d.skipped + ' resumed · ' + d.failed + ' failed';
+            if (d.totalFiles > 0) msg += '<br>' + (d.totalFiles - d.failedFiles) + ' of ' + d.totalFiles + ' files downloaded.';
+            if (d.projects   > 0) msg += '<br>' + d.projects + ' project(s) exported.';
+            if (d.gpts       > 0) msg += '<br>' + d.gpts + ' GPT(s) exported to <code>gpts/</code>';
+            msg += '<br><br>Saved to:<br><code>' + d.output + '</code>';
+            if (d.failedTitles && d.failedTitles.length)
+              msg += '<br><br>' + d.failed + ' conversations failed: ' + d.failedTitles.join(', ');
+            showResult('success', msg);
+          }
+          resetUI();
+        });
+
+        evtSource.onerror = () => {
+          evtSource.close();
+          showResult('error', 'Connection lost.');
+          resetUI();
+        };
+      })
+      .catch(err => {
+        showResult('error', 'Failed to start: ' + err.message);
+        resetUI();
+      });
+  }
+
+  function resetUI() {
+    document.getElementById('export-btn').disabled  = false;
+    document.getElementById('token-input').disabled = false;
+  }
+
+  function showResult(type, message) {
+    const el = document.getElementById('result');
+    el.className = 'result ' + type;
+    el.innerHTML = message;
+    el.classList.remove('hidden');
+  }
+</script>
+</body>
+</html>
