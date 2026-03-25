@@ -22,6 +22,54 @@ import { fileURLToPath }                      from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// ── Debug logging ─────────────────────────────────────────────────────
+
+const DEBUG      = process.argv.includes("--debug");
+const DEBUG_LOG  = join(__dirname, "debug.log");
+
+function dbg(msg, data) {
+  if (!DEBUG) return;
+  const ts   = new Date().toISOString();
+  const line = data !== undefined
+    ? `[${ts}] ${msg} ${typeof data === "string" ? data : JSON.stringify(data, null, 2)}`
+    : `[${ts}] ${msg}`;
+  appendFileSync(DEBUG_LOG, line + "\n", "utf8");
+  console.log("[DEBUG]", msg, data !== undefined ? data : "");
+}
+
+if (DEBUG) {
+  // Write system info header
+  const { version, platform, arch } = process;
+  const proxy = process.env.HTTPS_PROXY || process.env.https_proxy ||
+                process.env.HTTP_PROXY  || process.env.http_proxy  || "(none)";
+  writeFileSync(DEBUG_LOG, [
+    "=".repeat(60),
+    `ChatGPT Exporter — Debug log started ${new Date().toISOString()}`,
+    `Node.js : ${version}`,
+    `Platform: ${platform} (${arch})`,
+    `Proxy   : ${proxy}`,
+    `CWD     : ${__dirname}`,
+    "=".repeat(60),
+    "",
+  ].join("\n"), "utf8");
+  console.log(`[DEBUG] Debug mode ON — logging to ${DEBUG_LOG}`);
+}
+
+// ── Debug-aware fetch wrappers ────────────────────────────────────────
+
+async function debugFetch(url, options = {}) {
+  const t0 = Date.now();
+  dbg(`FETCH → ${url}`);
+  try {
+    const resp = await fetch(url, options);
+    dbg(`FETCH ← ${url}`, `HTTP ${resp.status} (${Date.now() - t0}ms)`);
+    return resp;
+  } catch (e) {
+    dbg(`FETCH ✗ ${url}`, `ERROR: ${e.message} — cause: ${e.cause?.message ?? e.cause ?? "(none)"}`);
+    throw e;
+  }
+}
+
 const API_BASE      = "https://chatgpt.com/backend-api";
 const API_BASE_PUB  = "https://chatgpt.com/public-api";
 const PAGE_SIZE  = 100;
@@ -52,7 +100,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ── API helpers ──────────────────────────────────────────────────────
 
 async function apiGet(path, token) {
-  const resp = await fetch(`${API_BASE}/${path}`, {
+  const resp = await debugFetch(`${API_BASE}/${path}`, {
     headers: { ...HEADERS, Authorization: `Bearer ${token}` },
   });
   if (!resp.ok) {
@@ -65,7 +113,7 @@ async function apiGet(path, token) {
 async function apiFetchBinary(url, token) {
   const h = { ...HEADERS, Accept: "*/*" };
   if (token) h.Authorization = `Bearer ${token}`;
-  const resp = await fetch(url, { headers: h });
+  const resp = await debugFetch(url, { headers: h });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const buffer = Buffer.from(await resp.arrayBuffer());
   const contentType = resp.headers.get("content-type") || "";
@@ -812,7 +860,7 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, ex
         let cursor = null;
         while (true) {
           const qs   = `limit=20${cursor ? "&cursor=" + encodeURIComponent(cursor) : ""}`;
-          const data = await fetch(`${API_BASE_PUB}/gizmos/discovery/mine?${qs}`, {
+          const data = await debugFetch(`${API_BASE_PUB}/gizmos/discovery/mine?${qs}`, {
             headers: { ...HEADERS, Authorization: `Bearer ${token}` },
           }).then(async (r) => {
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -853,7 +901,7 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, ex
         let cursor = null;
         while (true) {
           const qs   = `owned_only=true&conversations_per_gizmo=0&limit=20${cursor ? "&cursor=" + encodeURIComponent(cursor) : ""}`;
-          const data = await fetch(`${API_BASE}/gizmos/snorlax/sidebar?${qs}`, {
+          const data = await debugFetch(`${API_BASE}/gizmos/snorlax/sidebar?${qs}`, {
             headers: { ...HEADERS, Authorization: `Bearer ${token}` },
           }).then(async (r) => {
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -1364,6 +1412,22 @@ const server = createServer((req, res) => {
     const defaultDir = join(homedir(), "Desktop", "chatgpt-export");
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ defaultDir, platform: process.platform }));
+
+  // Debug log viewer
+  } else if (req.method === "GET" && req.url === "/debug-log") {
+    if (!DEBUG) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ enabled: false, message: "Start server with --debug to enable debug logging." }));
+      return;
+    }
+    try {
+      const content = existsSync(DEBUG_LOG) ? readFileSync(DEBUG_LOG, "utf8") : "(empty)";
+      res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end(content);
+    } catch {
+      res.writeHead(500);
+      res.end("Could not read debug log.");
+    }
 
   // Directory listing for in-browser folder picker
   } else if (req.method === "GET" && req.url.startsWith("/list-dir")) {
