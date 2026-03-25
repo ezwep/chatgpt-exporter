@@ -1359,20 +1359,55 @@ const server = createServer((req, res) => {
 
     req.on("close", () => { clearInterval(interval); if (!res.writableEnded) res.end(); });
 
-  // Folder picker (macOS only)
-  } else if (req.method === "GET" && req.url === "/pick-folder") {
+  // Platform config (default dir + platform name)
+  } else if (req.method === "GET" && req.url === "/config") {
+    const defaultDir = join(homedir(), "Desktop", "chatgpt-export");
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ defaultDir, platform: process.platform }));
+
+  // Directory listing for in-browser folder picker
+  } else if (req.method === "GET" && req.url.startsWith("/list-dir")) {
     try {
-      const result = execSync(
-        `osascript -e 'POSIX path of (choose folder with prompt "Kies export map:")'`,
-        { encoding: "utf8" }
-      ).trim();
+      const qs     = new URL(req.url, `http://${HOST}`).searchParams;
+      const reqPath = qs.get("path") || homedir();
+      const sep    = process.platform === "win32" ? "\\" : "/";
+      const parent = reqPath.split(sep).slice(0, -1).join(sep) || sep;
+      const entries = readdirSync(reqPath, { withFileTypes: true });
+      const dirs = entries
+        .filter(e => e.isDirectory() && !e.name.startsWith("."))
+        .map(e => ({ name: e.name, path: join(reqPath, e.name) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      // On Windows, list drives if at root
+      let drives = [];
+      if (process.platform === "win32" && (reqPath === "" || reqPath.match(/^[A-Z]:\\?$/i))) {
+        for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+          const d = `${letter}:\\`;
+          try { readdirSync(d); drives.push({ name: d, path: d }); } catch {}
+        }
+      }
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ path: result }));
-    } catch {
-      // User cancelled the dialog
+      res.end(JSON.stringify({ path: reqPath, parent, dirs, drives }));
+    } catch (e) {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ path: null }));
+      res.end(JSON.stringify({ path: homedir(), parent: homedir(), dirs: [], drives: [], error: e.message }));
     }
+
+  // Create directory
+  } else if (req.method === "POST" && req.url === "/create-dir") {
+    let body = "";
+    req.on("data", c => (body += c));
+    req.on("end", () => {
+      try {
+        const { path } = JSON.parse(body);
+        if (!path) throw new Error("No path provided");
+        mkdirSync(path, { recursive: true });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, path }));
+      } catch (e) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    });
 
   } else {
     res.writeHead(404);
@@ -1382,6 +1417,14 @@ const server = createServer((req, res) => {
 
 // ── Start ────────────────────────────────────────────────────────────
 
+server.on("error", (e) => {
+  if (e.code === "EADDRINUSE") {
+    console.error(`\nPort ${PORT} is already in use — server is probably already running.`);
+    console.error(`Open http://${HOST}:${PORT} in your browser.\n`);
+    process.exit(0);
+  }
+});
+
 const url = `http://${HOST}:${PORT}`;
 server.listen(PORT, HOST, () => {
   console.log(`\nChatGPT Exporter v2 running at ${url}`);
@@ -1389,7 +1432,7 @@ server.listen(PORT, HOST, () => {
   try {
     if      (process.platform === "darwin") execSync(`open "${url}"`);
     else if (process.platform === "linux")  execSync(`xdg-open "${url}"`);
-    else if (process.platform === "win32")  execSync(`start "${url}"`);
+    else if (process.platform === "win32")  execSync(`start "" "${url}"`);
   } catch {}
 });
 

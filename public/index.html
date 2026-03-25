@@ -116,9 +116,92 @@
   .date-field input[type="date"]:focus { border-color: #3b82f6; }
   .date-sep { color: #64748b; font-size: 13px; padding-bottom: 10px; }
   .options-hint { font-size: 11px; color: #475569; margin-top: 6px; }
+
+  /* Folder picker modal */
+  .fp-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7); z-index: 1000;
+    align-items: center; justify-content: center;
+  }
+  .fp-overlay.open { display: flex; }
+  .fp-modal {
+    background: #1e293b; border-radius: 12px;
+    width: 480px; max-width: 95vw; max-height: 80vh;
+    display: flex; flex-direction: column;
+    box-shadow: 0 25px 60px rgba(0,0,0,0.6);
+  }
+  .fp-header {
+    padding: 14px 16px; border-bottom: 1px solid #334155;
+    display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+  }
+  .fp-header h3 { font-size: 14px; color: #f8fafc; flex: 1; margin: 0; }
+  .fp-path {
+    font-size: 11px; color: #64748b; word-break: break-all;
+    padding: 8px 16px; background: #0f172a; flex-shrink: 0;
+    border-bottom: 1px solid #1e293b;
+  }
+  .fp-list {
+    overflow-y: auto; flex: 1; padding: 8px 0;
+  }
+  .fp-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 16px; cursor: pointer; font-size: 13px; color: #cbd5e1;
+    transition: background 0.1s;
+  }
+  .fp-item:hover { background: #334155; }
+  .fp-item.up { color: #94a3b8; }
+  .fp-item-icon { font-size: 15px; flex-shrink: 0; }
+  .fp-empty { padding: 24px 16px; font-size: 13px; color: #475569; text-align: center; }
+  .fp-footer {
+    padding: 12px 16px; border-top: 1px solid #334155;
+    display: flex; gap: 8px; justify-content: flex-end; flex-shrink: 0;
+  }
+  .fp-footer button {
+    width: auto; padding: 8px 18px; font-size: 13px; border-radius: 7px;
+  }
+  .fp-btn-cancel { background: #334155; }
+  .fp-btn-cancel:hover { background: #475569; }
+  .fp-btn-select { background: #3b82f6; }
+  .fp-btn-select:hover { background: #2563eb; }
+  .fp-btn-new { background: #1e3a5f; color: #93c5fd; border: 1px solid #2563eb; }
+  .fp-btn-new:hover { background: #1e40af; color: #fff; }
+  .fp-new-row {
+    display: none; padding: 8px 16px; gap: 8px;
+    border-top: 1px solid #334155; flex-shrink: 0;
+  }
+  .fp-new-row.open { display: flex; }
+  .fp-new-row input {
+    flex: 1; background: #0f172a; border: 1px solid #334155; border-radius: 6px;
+    color: #e2e8f0; padding: 7px 10px; font-size: 13px; outline: none;
+  }
+  .fp-new-row input:focus { border-color: #3b82f6; }
+  .fp-new-row button { width: auto; padding: 7px 14px; font-size: 13px; border-radius: 6px; }
 </style>
 </head>
 <body>
+
+<!-- Folder picker modal -->
+<div class="fp-overlay" id="fp-overlay" onclick="if(event.target===this)fpClose()">
+  <div class="fp-modal">
+    <div class="fp-header">
+      <h3>📁 Choose folder</h3>
+      <button class="fp-btn-cancel" onclick="fpClose()" style="width:auto;padding:4px 10px;font-size:12px">✕</button>
+    </div>
+    <div class="fp-path" id="fp-path"></div>
+    <div class="fp-list" id="fp-list"></div>
+    <div class="fp-new-row" id="fp-new-row">
+      <input id="fp-new-input" type="text" placeholder="New folder name…" onkeydown="if(event.key==='Enter')fpCreateFolder();if(event.key==='Escape')fpToggleNew(false)">
+      <button class="fp-btn-select" onclick="fpCreateFolder()">Create</button>
+      <button class="fp-btn-cancel" onclick="fpToggleNew(false)">✕</button>
+    </div>
+    <div class="fp-footer">
+      <button class="fp-btn-new" onclick="fpToggleNew(true)">📁+ New folder</button>
+      <button class="fp-btn-cancel" onclick="fpClose()" style="margin-left:auto">Cancel</button>
+      <button class="fp-btn-select" onclick="fpSelect()">Select this folder</button>
+    </div>
+  </div>
+</div>
+
 <div class="card">
   <h1>ChatGPT Exporter</h1>
   <p class="subtitle">Export all your conversations as JSON, Markdown &amp; HTML — with resume &amp; projects support</p>
@@ -145,7 +228,7 @@
   <div class="field">
     <label for="output-dir">Output folder</label>
     <div class="field-row">
-      <input type="text" id="output-dir" placeholder="~/Desktop/chatgpt-export" value="~/Desktop/chatgpt-export">
+      <input type="text" id="output-dir" placeholder="Loading...">
       <button class="btn-browse" onclick="pickFolder()">📁 Browse</button>
     </div>
   </div>
@@ -244,28 +327,127 @@
     arrow.classList.toggle('open');
   }
 
+  // ── In-browser folder picker ────────────────────────────────────────
+  let _fpCurrentPath = '';
+
   async function pickFolder() {
-    const resp = await fetch('/pick-folder').catch(() => null);
-    if (!resp || !resp.ok) return;
-    const { path } = await resp.json();
-    if (path) {
-      document.getElementById('output-dir').value = path.replace(/\/$/, '');
-      localStorage.setItem('cge_prefs', JSON.stringify({
-        outputDir: path.replace(/\/$/, ''),
-        concurrency: document.getElementById('concurrency').value,
-      }));
+    const startPath = document.getElementById('output-dir').value.trim() || _defaultDir;
+    await fpNavigate(startPath);
+    document.getElementById('fp-overlay').classList.add('open');
+  }
+
+  async function fpNavigate(path) {
+    document.getElementById('fp-path').textContent = path;
+    document.getElementById('fp-list').innerHTML = '<div class="fp-empty">Loading…</div>';
+    _fpCurrentPath = path;
+    const resp = await fetch('/list-dir?path=' + encodeURIComponent(path)).catch(() => null);
+    if (!resp || !resp.ok) {
+      document.getElementById('fp-list').innerHTML = '<div class="fp-empty">Could not read directory.</div>';
+      return;
+    }
+    const { dirs, drives, parent } = await resp.json();
+    const list = document.getElementById('fp-list');
+    list.innerHTML = '';
+
+    // Drives (Windows root)
+    if (drives && drives.length) {
+      drives.forEach(d => {
+        const el = document.createElement('div');
+        el.className = 'fp-item';
+        el.innerHTML = `<span class="fp-item-icon">💾</span>${d.name}`;
+        el.onclick = () => fpNavigate(d.path);
+        list.appendChild(el);
+      });
+      return;
+    }
+
+    // Parent entry
+    if (parent && parent !== path) {
+      const up = document.createElement('div');
+      up.className = 'fp-item up';
+      up.innerHTML = '<span class="fp-item-icon">↑</span>Parent folder';
+      up.onclick = () => fpNavigate(parent);
+      list.appendChild(up);
+    }
+
+    if (!dirs.length) {
+      const empty = document.createElement('div');
+      empty.className = 'fp-empty';
+      empty.textContent = 'No subfolders here.';
+      list.appendChild(empty);
+      return;
+    }
+
+    dirs.forEach(d => {
+      const el = document.createElement('div');
+      el.className = 'fp-item';
+      el.innerHTML = `<span class="fp-item-icon">📁</span>${d.name}`;
+      el.onclick = () => fpNavigate(d.path);
+      list.appendChild(el);
+    });
+  }
+
+  function fpSelect() {
+    document.getElementById('output-dir').value = _fpCurrentPath;
+    fpClose();
+    localStorage.setItem('cge_prefs', JSON.stringify({
+      outputDir: _fpCurrentPath,
+      concurrency: document.getElementById('concurrency').value,
+      keepAwake: document.getElementById('keep-awake').checked,
+    }));
+  }
+
+  function fpClose() {
+    document.getElementById('fp-overlay').classList.remove('open');
+    fpToggleNew(false);
+  }
+
+  function fpToggleNew(open) {
+    const row = document.getElementById('fp-new-row');
+    const inp = document.getElementById('fp-new-input');
+    if (open) {
+      row.classList.add('open');
+      inp.value = '';
+      inp.focus();
+    } else {
+      row.classList.remove('open');
     }
   }
 
-  // Restore saved values
-  const saved = JSON.parse(localStorage.getItem('cge_prefs') || '{}');
-  if (saved.outputDir)              document.getElementById('output-dir').value  = saved.outputDir;
-  if (saved.concurrency)            document.getElementById('concurrency').value  = saved.concurrency;
-  if (saved.keepAwake !== undefined) document.getElementById('keep-awake').checked = saved.keepAwake;
+  async function fpCreateFolder() {
+    const name = document.getElementById('fp-new-input').value.trim();
+    if (!name) return;
+    const newPath = _fpCurrentPath.replace(/[\\/]$/, '') + (_fpCurrentPath.includes('\\') ? '\\' : '/') + name;
+    const resp = await fetch('/create-dir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: newPath }),
+    }).catch(() => null);
+    if (!resp) return;
+    const { ok, error } = await resp.json();
+    if (ok) {
+      fpToggleNew(false);
+      await fpNavigate(newPath);
+    } else {
+      alert('Could not create folder: ' + error);
+    }
+  }
+
+  // Load platform config and restore saved values
+  let _defaultDir = '';
+  fetch('/config').then(r => r.json()).then(cfg => {
+    _defaultDir = cfg.defaultDir;
+    const saved = JSON.parse(localStorage.getItem('cge_prefs') || '{}');
+    const dirField = document.getElementById('output-dir');
+    dirField.value       = saved.outputDir || cfg.defaultDir;
+    dirField.placeholder = cfg.defaultDir;
+    if (saved.concurrency)             document.getElementById('concurrency').value  = saved.concurrency;
+    if (saved.keepAwake !== undefined)  document.getElementById('keep-awake').checked = saved.keepAwake;
+  });
 
   function startExport() {
     const raw         = document.getElementById('token-input').value.trim();
-    const outputDir   = document.getElementById('output-dir').value.trim() || '~/Desktop/chatgpt-export';
+    const outputDir   = document.getElementById('output-dir').value.trim() || _defaultDir || '~/Desktop/chatgpt-export';
     const concurrency = parseInt(document.getElementById('concurrency').value, 10);
     const createZip   = document.getElementById('create-zip').checked;
     const keepAwake   = document.getElementById('keep-awake').checked;
