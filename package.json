@@ -1,9 +1,24 @@
 {
   "name": "chatgpt-exporter",
   "version": "2.0.0",
-  "description": "ChatGPT conversation exporter — terminal server met web UI",
+  "description": "Export all your ChatGPT conversations, projects & GPTs as JSON, Markdown and HTML",
   "type": "module",
+  "bin": {
+    "chatgpt-exporter": "./bin/cli.js"
+  },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "npx @yao-pkg/pkg server.js --targets node18-win-x64 --output dist/chatgpt-exporter-win.exe"
+  },
+  "keywords": ["chatgpt", "openai", "export", "backup", "conversations"],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "pkg": {
+    "scripts": "server.js",
+    "assets": [],
+    "targets": ["node18-win-x64"],
+    "outputPath": "dist"
   }
 }

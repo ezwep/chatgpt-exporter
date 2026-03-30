@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-windows:
+    name: Build Windows binary
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Build Windows executable
+        run: npx @yao-pkg/pkg server.js --targets node18-win-x64 --output dist/chatgpt-exporter-win.exe
+
+      - name: Upload Windows binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatgpt-exporter-win
+          path: dist/chatgpt-exporter-win.exe
+
+  release:
+    name: Create GitHub Release
+    needs: build-windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows binary
+        uses: actions/download-artifact@v4
+        with:
+          name: chatgpt-exporter-win
+          path: dist/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/chatgpt-exporter-win.exe
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            ### Windows (no Node.js required)
+            Download `chatgpt-exporter-win.exe` and double-click to run.
+            > Windows SmartScreen may show a warning — click "More info" → "Run anyway".
+
+            ### macOS / Linux (requires Node.js 18+)
+            ```bash
+            npx chatgpt-exporter
+            ```
+
+            ### Manual install
+            ```bash
+            git clone https://github.com/ezwep/chatgpt-exporter.git
+            cd chatgpt-exporter
+            node server.js
+            ```

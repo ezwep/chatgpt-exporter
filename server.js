@@ -1489,17 +1489,22 @@ server.on("error", (e) => {
   }
 });
 
-const url = `http://${HOST}:${PORT}`;
-server.listen(PORT, HOST, () => {
-  console.log(`\nChatGPT Exporter v2 running at ${url}`);
-  console.log("Press Ctrl+C to stop.\n");
-  try {
-    if      (process.platform === "darwin") execSync(`open "${url}"`);
-    else if (process.platform === "linux")  execSync(`xdg-open "${url}"`);
-    else if (process.platform === "win32")  execSync(`start "" "${url}"`);
-  } catch {}
-});
+export function startServer() {
+  const url = `http://${HOST}:${PORT}`;
+  server.listen(PORT, HOST, () => {
+    console.log(`\nChatGPT Exporter v2 running at ${url}`);
+    console.log("Press Ctrl+C to stop.\n");
+    try {
+      if      (process.platform === "darwin") execSync(`open "${url}"`);
+      else if (process.platform === "linux")  execSync(`xdg-open "${url}"`);
+      else if (process.platform === "win32")  execSync(`start "" "${url}"`);
+    } catch {}
+  });
 
-// Ensure caffeinate is killed on server exit
-process.on("SIGINT",  () => { if (global._caffeinate) try { global._caffeinate.kill(); } catch {} process.exit(0); });
-process.on("SIGTERM", () => { if (global._caffeinate) try { global._caffeinate.kill(); } catch {} process.exit(0); });
+  // Ensure caffeinate is killed on server exit
+  process.on("SIGINT",  () => { if (global._caffeinate) try { global._caffeinate.kill(); } catch {} process.exit(0); });
+  process.on("SIGTERM", () => { if (global._caffeinate) try { global._caffeinate.kill(); } catch {} process.exit(0); });
+}
+
+// Auto-start when run directly (node server.js or npm start)
+startServer();
