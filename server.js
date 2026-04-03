@@ -102,10 +102,25 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ── API helpers ──────────────────────────────────────────────────────
 
+const MAX_RETRIES   = 5;
+const BACKOFF_BASE  = 5000; // 5s, 10s, 20s, 40s, 80s
+
+async function retryOn429(fn) {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const resp = await fn();
+    if (resp.status !== 429) return resp;
+    if (attempt === MAX_RETRIES) return resp; // give up
+    const retryAfter = resp.headers.get("retry-after");
+    const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : BACKOFF_BASE * Math.pow(2, attempt);
+    dbg(`429 rate limited — waiting ${Math.round(waitMs / 1000)}s before retry ${attempt + 1}/${MAX_RETRIES}`);
+    await sleep(waitMs);
+  }
+}
+
 async function apiGet(path, token) {
-  const resp = await debugFetch(`${API_BASE}/${path}`, {
+  const resp = await retryOn429(() => debugFetch(`${API_BASE}/${path}`, {
     headers: { ...HEADERS, Authorization: `Bearer ${token}` },
-  });
+  }));
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
     throw new Error(`HTTP ${resp.status}: ${body.slice(0, 300)}`);
@@ -116,7 +131,7 @@ async function apiGet(path, token) {
 async function apiFetchBinary(url, token) {
   const h = { ...HEADERS, Accept: "*/*" };
   if (token) h.Authorization = `Bearer ${token}`;
-  const resp = await debugFetch(url, { headers: h });
+  const resp = await retryOn429(() => debugFetch(url, { headers: h }));
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const buffer = Buffer.from(await resp.arrayBuffer());
   const contentType = resp.headers.get("content-type") || "";
@@ -863,9 +878,9 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, ex
         let cursor = null;
         while (true) {
           const qs   = `limit=20${cursor ? "&cursor=" + encodeURIComponent(cursor) : ""}`;
-          const data = await debugFetch(`${API_BASE_PUB}/gizmos/discovery/mine?${qs}`, {
+          const data = await retryOn429(() => debugFetch(`${API_BASE_PUB}/gizmos/discovery/mine?${qs}`, {
             headers: { ...HEADERS, Authorization: `Bearer ${token}` },
-          }).then(async (r) => {
+          })).then(async (r) => {
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
             return r.json();
           });
@@ -904,9 +919,9 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, ex
         let cursor = null;
         while (true) {
           const qs   = `owned_only=true&conversations_per_gizmo=0&limit=20${cursor ? "&cursor=" + encodeURIComponent(cursor) : ""}`;
-          const data = await debugFetch(`${API_BASE}/gizmos/snorlax/sidebar?${qs}`, {
+          const data = await retryOn429(() => debugFetch(`${API_BASE}/gizmos/snorlax/sidebar?${qs}`, {
             headers: { ...HEADERS, Authorization: `Bearer ${token}` },
-          }).then(async (r) => {
+          })).then(async (r) => {
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
             return r.json();
           });
