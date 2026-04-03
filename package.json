@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "build": "npx @yao-pkg/pkg server.js --targets node18-win-x64 --output dist/chatgpt-exporter-win.exe"
+    "build": "npx esbuild server.js --bundle --platform=node --format=cjs --outfile=bundle.cjs && npx @yao-pkg/pkg bundle.cjs --targets node18-win-x64 --output dist/chatgpt-exporter-win.exe && node -e \"const{cpSync}=require('fs');cpSync('public','dist/public',{recursive:true})\""
   },
   "keywords": ["chatgpt", "openai", "export", "backup", "conversations"],
   "license": "MIT",
@@ -16,8 +16,8 @@
     "node": ">=18"
   },
   "pkg": {
-    "scripts": "server.js",
-    "assets": [],
+    "scripts": "bundle.cjs",
+    "assets": ["public/**/*"],
     "targets": ["node18-win-x64"],
     "outputPath": "dist"
   }

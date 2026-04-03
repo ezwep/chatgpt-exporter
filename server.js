@@ -20,12 +20,15 @@ import { Buffer }                             from "node:buffer";
 import { execSync, spawn }                    from "node:child_process";
 import { fileURLToPath }                      from "node:url";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const __dirname = (() => {
+  try { return dirname(fileURLToPath(import.meta.url)); }
+  catch { return dirname(process.argv[1] || "."); }
+})();
 
 // ── Debug logging ─────────────────────────────────────────────────────
 
 const DEBUG      = process.argv.includes("--debug");
-const DEBUG_LOG  = join(__dirname, "debug.log");
+const DEBUG_LOG  = join(dirname(process.execPath), "debug.log");
 
 function dbg(msg, data) {
   if (!DEBUG) return;
@@ -917,6 +920,7 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, ex
             const name  = gizmo.display?.name || gizmo.name || gizmoId;
             const files = wrapper.files || [];
             allProjects.push({ gizmoId, name, gizmo, files });
+            sendEvent("status", `Found project: ${name}`);
           }
           cursor = data.list?.cursor || data.cursor || null;
           if (!cursor) break;
@@ -959,11 +963,14 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, ex
     // ── Export project metadata + resources ──────────────────────────
     if (doProjs) {
       try {
-        for (const proj of allProjects) {
+        for (let pi = 0; pi < allProjects.length; pi++) {
+          const proj = allProjects[pi];
           const projName = proj.name;
           const projSafe = sanitizeFilename(projName);
           const projDir  = join(rootDir, "projects", projSafe);
           mkdirSync(projDir, { recursive: true });
+
+          sendEvent("status", `Exporting project ${pi + 1}/${allProjects.length}: ${projName}`);
 
           const infoMd = projectToMarkdown(proj.gizmo);
           writeFileSync(join(projDir, "project-info.md"), infoMd, "utf8");
@@ -974,10 +981,12 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, ex
             if (filesList.length) {
               const resDir = join(projDir, "resources");
               mkdirSync(resDir, { recursive: true });
-              for (const f of filesList) {
+              for (let fi = 0; fi < filesList.length; fi++) {
+                const f = filesList[fi];
                 const rawId    = f.file_id || f.id || "";
                 const fileId   = rawId.startsWith("file") ? rawId : `file-${rawId}`;
                 const fileName = f.name || f.filename || rawId;
+                sendEvent("status", `Project ${pi + 1}/${allProjects.length} "${projName}" — downloading file ${fi + 1}/${filesList.length}: ${fileName}`);
                 try {
                   const { buffer, filename: dlName } = await downloadFile(fileId, token, fileName, null, proj.gizmoId);
                   const safe = sanitizeFilename(dlName || fileName);
@@ -1313,14 +1322,21 @@ const exportJobs = new Map(); // exportId → { events: [], done: false }
 const server = createServer((req, res) => {
   // Serve UI
   if (req.method === "GET" && (req.url === "/" || req.url === "")) {
-    const htmlPath = join(__dirname, "public", "index.html");
-    try {
-      const html = readFileSync(htmlPath, "utf8");
+    const candidates = [
+      join(__dirname, "public", "index.html"),
+      join(dirname(process.execPath), "public", "index.html"),
+      join(process.cwd(), "public", "index.html"),
+    ];
+    let html = null;
+    for (const p of candidates) {
+      try { html = readFileSync(p, "utf8"); break; } catch {}
+    }
+    if (html) {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(html);
-    } catch {
+    } else {
       res.writeHead(500);
-      res.end("Could not read public/index.html");
+      res.end("Could not find public/index.html — place the 'public' folder next to the exe.");
     }
 
   // Start export
