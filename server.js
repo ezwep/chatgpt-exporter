@@ -102,17 +102,35 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ── API helpers ──────────────────────────────────────────────────────
 
-const MAX_RETRIES   = 5;
-const BACKOFF_BASE  = 5000; // 5s, 10s, 20s, 40s, 80s
+const MAX_RETRIES   = 8;
+const BACKOFF_BASE  = 5000; // 5s, 10s, 20s, 40s, 80s, 160s, 300s (capped)
+const BACKOFF_CAP   = 300000; // 5 minutes max
+
+// Global cooldown — shared across all parallel workers.
+// When ONE request hits 429, ALL subsequent requests wait until cooldownUntil.
+let cooldownUntil = 0;
+let onCooldown    = null; // optional callback: (waitMs, attempt) => void
+
+async function waitForCooldown() {
+  const now = Date.now();
+  if (cooldownUntil > now) await sleep(cooldownUntil - now);
+}
 
 async function retryOn429(fn) {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    await waitForCooldown(); // respect any active global cooldown
     const resp = await fn();
     if (resp.status !== 429) return resp;
-    if (attempt === MAX_RETRIES) return resp; // give up
+    if (attempt === MAX_RETRIES) return resp; // give up after all retries
     const retryAfter = resp.headers.get("retry-after");
-    const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : BACKOFF_BASE * Math.pow(2, attempt);
-    dbg(`429 rate limited — waiting ${Math.round(waitMs / 1000)}s before retry ${attempt + 1}/${MAX_RETRIES}`);
+    const waitMs = Math.min(
+      retryAfter ? parseInt(retryAfter, 10) * 1000 : BACKOFF_BASE * Math.pow(2, attempt),
+      BACKOFF_CAP
+    );
+    // Set global cooldown so other workers also pause
+    cooldownUntil = Math.max(cooldownUntil, Date.now() + waitMs);
+    dbg(`429 rate limited — global cooldown ${Math.round(waitMs / 1000)}s (retry ${attempt + 1}/${MAX_RETRIES})`);
+    if (onCooldown) try { onCooldown(waitMs, attempt + 1); } catch { /* ignore */ }
     await sleep(waitMs);
   }
 }
@@ -866,6 +884,14 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, ex
       else if (type === "error_msg") log(`ERROR    ${data}`);
     };
 
+    // Surface rate-limit cooldowns in the UI and main log (not just debug.log)
+    onCooldown = (waitMs, attempt) => {
+      const secs = Math.round(waitMs / 1000);
+      const msg  = `Rate limited by ChatGPT — pausing ${secs}s (retry ${attempt}/${MAX_RETRIES})`;
+      log(`RATE     ${msg}`);
+      try { _send("status", msg); } catch { /* ignore */ }
+    };
+
     const zipFiles = [];
 
     // ── Export GPTs ──────────────────────────────────────────────────
@@ -1327,6 +1353,8 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, ex
     sendEvent("error_msg", `Export failed: ${e.message}`);
   } finally {
     if (caffeinate) { try { caffeinate.kill(); } catch { /* ignore */ } global._caffeinate = null; }
+    onCooldown = null;     // reset cooldown hook for next run
+    cooldownUntil = 0;
   }
 }
 
