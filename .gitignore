@@ -12,6 +12,10 @@ Export/
 logs/
 *.log
 
+# Build artifacts
+dist/
+bundle.cjs
+
 # Node.js
 node_modules/
 

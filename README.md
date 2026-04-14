@@ -81,6 +81,18 @@ Click **Export options** to expand:
 - Node.js 18 or later
 - macOS, Linux, or Windows
 
+## Troubleshooting
+
+Start the server with `--debug` to create a detailed log of all HTTP requests:
+
+```bash
+node server.js --debug
+```
+
+The debug log is written to `debug.log` next to the executable/script. You can also view it in your browser at `http://127.0.0.1:8523/debug-log` while the server is running.
+
+> **Privacy note:** Debug logs contain API endpoint URLs including conversation and file IDs. Do not share debug logs publicly without reviewing them first.
+
 ## How it works
 
 The tool uses ChatGPT's internal API endpoints (the same ones the web app uses) with your session token. It fetches conversation lists, individual conversations with full message trees, project metadata and resources, and custom GPT configurations. No third-party APIs or services are involved — everything stays on your local machine.
