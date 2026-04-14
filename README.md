@@ -43,24 +43,50 @@ chatgpt-export/
 └── logs/             ← export run logs
 ```
 
-## Quick start
+## Installation
+
+Pick the option that matches your platform and comfort level. The browser will open automatically at `http://127.0.0.1:8523` once the server starts.
+
+### Option 1 — Windows standalone executable (no install required)
+
+For non-technical Windows users:
+
+1. Download the latest `chatgpt-exporter-win.exe` from the [Releases page](https://github.com/ezwep/chatgpt-exporter/releases)
+2. Place it in any folder
+3. Double-click to run
+
+No Node.js installation needed.
+
+### Option 2 — npx (any OS, no clone)
+
+Requires [Node.js 18+](https://nodejs.org/) installed. Then run in your terminal:
+
+```bash
+npx chatgpt-exporter
+```
+
+Works on macOS, Linux, and Windows. Downloads and runs in one command.
+
+### Option 3 — Clone and run (any OS, for developers)
 
 ```bash
 git clone https://github.com/ezwep/chatgpt-exporter.git
 cd chatgpt-exporter
-npm install
 npm start
 ```
 
-The browser opens automatically at `http://127.0.0.1:8523`.
+> **Note:** `npm install` is **not** required — this tool has zero npm dependencies.
 
 ### Get your session token
 
-1. Open [chatgpt.com/api/auth/session](https://chatgpt.com/api/auth/session) in a new tab (log in first if needed)
-2. Select all (`Cmd+A` / `Ctrl+A`), copy, and paste into the text area
-3. Click **Export conversations**
+After the UI opens in your browser:
 
-The export runs in the background. You can close the browser tab — progress is saved and resumable.
+1. Open [chatgpt.com/api/auth/session](https://chatgpt.com/api/auth/session) in a new tab (log in first if needed)
+2. Select all (`Cmd+A` on macOS, `Ctrl+A` on Windows/Linux), copy, and paste into the text area
+3. Choose your output folder (the **Browse** button opens an in-browser folder picker — works on all platforms)
+4. Click **Export conversations**
+
+The export runs in the background. You can close the browser tab — progress is saved and resumable. Re-running the tool skips conversations already exported.
 
 ## Export options
 
@@ -78,18 +104,33 @@ Click **Export options** to expand:
 
 ## Requirements
 
-- Node.js 18 or later
-- macOS, Linux, or Windows
+- **Windows users (Option 1)**: nothing — the `.exe` is standalone
+- **All other options**: [Node.js 18+](https://nodejs.org/)
+- Supported platforms: macOS, Linux, Windows
+
+## Building the Windows executable yourself
+
+If you'd rather build the `.exe` from source (e.g. for an architecture other than x64), clone the repo and run:
+
+```bash
+npm run build
+```
+
+This bundles `server.js` with esbuild and packages it with `pkg`. Output lands in `dist/chatgpt-exporter-win.exe` together with a `dist/public/` folder. Ship the whole `dist/` directory.
 
 ## Troubleshooting
 
-Start the server with `--debug` to create a detailed log of all HTTP requests:
+Start the server in debug mode to capture every HTTP request:
 
 ```bash
+# macOS / Linux / Windows (when running from source)
 node server.js --debug
+
+# Windows (when running the .exe)
+chatgpt-exporter-win.exe --debug
 ```
 
-The debug log is written to `debug.log` next to the executable/script. You can also view it in your browser at `http://127.0.0.1:8523/debug-log` while the server is running.
+The `debug.log` file is created in the same folder as the script or `.exe`. You can also view it live in your browser at `http://127.0.0.1:8523/debug-log` while the server is running.
 
 > **Privacy note:** Debug logs contain API endpoint URLs including conversation and file IDs. Do not share debug logs publicly without reviewing them first.
 
