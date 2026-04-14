@@ -18,13 +18,20 @@ jobs:
           node-version: '18'
 
       - name: Build Windows executable
-        run: npx @yao-pkg/pkg server.js --targets node18-win-x64 --output dist/chatgpt-exporter-win.exe
+        run: npm run build
 
-      - name: Upload Windows binary
+      - name: Create distribution ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/chatgpt-exporter-win.exe,dist/public -DestinationPath dist/chatgpt-exporter-win.zip
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: chatgpt-exporter-win
-          path: dist/chatgpt-exporter-win.exe
+          path: |
+            dist/chatgpt-exporter-win.exe
+            dist/chatgpt-exporter-win.zip
 
   release:
     name: Create GitHub Release
@@ -44,13 +51,16 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/chatgpt-exporter-win.exe
+          files: |
+            dist/chatgpt-exporter-win.exe
+            dist/chatgpt-exporter-win.zip
           generate_release_notes: true
           body: |
             ## Installation
 
             ### Windows (no Node.js required)
-            Download `chatgpt-exporter-win.exe` and double-click to run.
+            Download `chatgpt-exporter-win.zip`, extract it, and double-click `chatgpt-exporter-win.exe`.
+            The zip contains the exe **and** the required `public/` folder.
             > Windows SmartScreen may show a warning — click "More info" → "Run anyway".
 
             ### macOS / Linux (requires Node.js 18+)
@@ -58,7 +68,7 @@ jobs:
             npx chatgpt-exporter
             ```
 
-            ### Manual install
+            ### Manual install (any OS)
             ```bash
             git clone https://github.com/ezwep/chatgpt-exporter.git
             cd chatgpt-exporter
