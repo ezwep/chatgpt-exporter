@@ -62,7 +62,7 @@ No Node.js installation needed.
 Requires [Node.js 18+](https://nodejs.org/) installed. Then run in your terminal:
 
 ```bash
-npx chatgpt-exporter
+npx chatgpt-full-exporter
 ```
 
 Works on macOS, Linux, and Windows. Downloads and runs in one command.

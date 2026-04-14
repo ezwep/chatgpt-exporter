@@ -1,11 +1,24 @@
 {
-  "name": "chatgpt-exporter",
+  "name": "chatgpt-full-exporter",
   "version": "2.0.0",
   "description": "Export all your ChatGPT conversations, projects & GPTs as JSON, Markdown and HTML",
   "type": "module",
   "bin": {
-    "chatgpt-exporter": "./bin/cli.js"
+    "chatgpt-full-exporter": "./bin/cli.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ezwep/chatgpt-exporter.git"
+  },
+  "homepage": "https://github.com/ezwep/chatgpt-exporter#readme",
+  "bugs": {
+    "url": "https://github.com/ezwep/chatgpt-exporter/issues"
+  },
+  "files": [
+    "server.js",
+    "bin/",
+    "public/"
+  ],
   "scripts": {
     "start": "node server.js",
     "build": "npx esbuild server.js --bundle --platform=node --format=cjs --outfile=bundle.cjs && npx @yao-pkg/pkg bundle.cjs --targets node18-win-x64 --output dist/chatgpt-exporter-win.exe && node -e \"const{cpSync}=require('fs');cpSync('public','dist/public',{recursive:true})\""
