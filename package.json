@@ -10,7 +10,28 @@
     "start": "node server.js",
     "build": "npx esbuild server.js --bundle --platform=node --format=cjs --outfile=bundle.cjs && npx @yao-pkg/pkg bundle.cjs --targets node18-win-x64 --output dist/chatgpt-exporter-win.exe && node -e \"const{cpSync}=require('fs');cpSync('public','dist/public',{recursive:true})\""
   },
-  "keywords": ["chatgpt", "openai", "export", "backup", "conversations"],
+  "keywords": [
+    "chatgpt",
+    "chatgpt-backup",
+    "chatgpt-export",
+    "chatgpt-exporter",
+    "chatgpt-archive",
+    "openai",
+    "gpt",
+    "backup",
+    "export",
+    "exporter",
+    "archive",
+    "archiver",
+    "conversations",
+    "projects",
+    "custom-gpts",
+    "data-portability",
+    "gdpr",
+    "self-hosted",
+    "markdown",
+    "json"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=18"
