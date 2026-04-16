@@ -1554,9 +1554,13 @@ export function startServer() {
     console.log(`\nChatGPT Exporter v2 running at ${url}`);
     console.log("Press Ctrl+C to stop.\n");
     try {
-      if      (process.platform === "darwin") execSync(`open "${url}"`);
-      else if (process.platform === "linux")  execSync(`xdg-open "${url}"`);
-      else if (process.platform === "win32")  execSync(`start "" "${url}"`);
+      if (process.platform === "win32") {
+        spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+      } else if (process.platform === "darwin") {
+        spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
+      } else {
+        spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
+      }
     } catch {}
   });
 
