@@ -25,13 +25,11 @@ jobs:
         run: |
           Compress-Archive -Path dist/chatgpt-exporter-win.exe,dist/public -DestinationPath dist/chatgpt-exporter-win.zip
 
-      - name: Upload artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: chatgpt-exporter-win
-          path: |
-            dist/chatgpt-exporter-win.exe
-            dist/chatgpt-exporter-win.zip
+          path: dist/chatgpt-exporter-win.zip
 
   release:
     name: Create GitHub Release
@@ -51,9 +49,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/chatgpt-exporter-win.exe
-            dist/chatgpt-exporter-win.zip
+          files: dist/chatgpt-exporter-win.zip
           generate_release_notes: true
           body: |
             ## Installation
@@ -65,7 +61,7 @@ jobs:
 
             ### macOS / Linux (requires Node.js 18+)
             ```bash
-            npx chatgpt-exporter
+            npx chatgpt-full-exporter
             ```
 
             ### Manual install (any OS)
