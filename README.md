@@ -60,6 +60,15 @@ Your browser opens automatically. No Node.js installation needed.
 > Windows SmartScreen may show a warning the first time — click **More info** → **Run anyway**.
 > Keep `chatgpt-exporter-win.exe` and the `public/` folder together — the exe needs `public/` to display the UI.
 
+You can also start it from a CMD or PowerShell window — handy for seeing live server output and any errors:
+
+```cmd
+cd C:\path\to\extracted\folder
+chatgpt-exporter-win.exe
+```
+
+Press `Ctrl+C` to stop the server. Add `--debug` for detailed troubleshooting logs (see [Troubleshooting](#troubleshooting)).
+
 ### Option 2 — npx (any OS, no clone)
 
 Requires [Node.js 18+](https://nodejs.org/) installed. Then run in your terminal:
