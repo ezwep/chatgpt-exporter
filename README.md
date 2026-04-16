@@ -47,15 +47,18 @@ chatgpt-export/
 
 Pick the option that matches your platform and comfort level. The browser will open automatically at `http://127.0.0.1:8523` once the server starts.
 
-### Option 1 — Windows standalone executable (no install required)
+### Option 1 — Windows standalone (no install required)
 
 For non-technical Windows users:
 
-1. Download the latest `chatgpt-exporter-win.exe` from the [Releases page](https://github.com/ezwep/chatgpt-exporter/releases)
-2. Place it in any folder
-3. Double-click to run
+1. Download `chatgpt-exporter-win.zip` from the [latest release](https://github.com/ezwep/chatgpt-exporter/releases/latest)
+2. Right-click the zip → **Extract All** to any folder
+3. Double-click `chatgpt-exporter-win.exe` in the extracted folder
 
-No Node.js installation needed.
+Your browser opens automatically. No Node.js installation needed.
+
+> Windows SmartScreen may show a warning the first time — click **More info** → **Run anyway**.
+> Keep `chatgpt-exporter-win.exe` and the `public/` folder together — the exe needs `public/` to display the UI.
 
 ### Option 2 — npx (any OS, no clone)
 
