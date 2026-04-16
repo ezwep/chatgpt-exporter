@@ -4,7 +4,7 @@
   "description": "Export all your ChatGPT conversations, projects & GPTs as JSON, Markdown and HTML",
   "type": "module",
   "bin": {
-    "chatgpt-full-exporter": "./bin/cli.js"
+    "chatgpt-full-exporter": "bin/cli.js"
   },
   "repository": {
     "type": "git",
