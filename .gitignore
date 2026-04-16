@@ -22,6 +22,10 @@ node_modules/
 # Archives
 *.zip
 
+# Screenshots (auto-saved by hook) — keep only the README image
+screenshots/*
+!screenshots/ui-expanded.png
+
 # OS
 .DS_Store
 Thumbs.db
