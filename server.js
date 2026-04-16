@@ -1555,7 +1555,9 @@ export function startServer() {
     console.log("Press Ctrl+C to stop.\n");
     try {
       if (process.platform === "win32") {
-        spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+        // explorer.exe is more reliable than `start` in RDP/service contexts.
+        // Note: explorer always exits with code 1 even on success — that's normal.
+        spawn("explorer.exe", [url], { detached: true, stdio: "ignore" }).unref();
       } else if (process.platform === "darwin") {
         spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
       } else {
