@@ -148,7 +148,17 @@ async function apiGet(path, token) {
 
 async function apiFetchBinary(url, token) {
   const h = { ...HEADERS, Accept: "*/*" };
-  if (token) h.Authorization = `Bearer ${token}`;
+
+  const target = new URL(url, "https://chatgpt.com/");
+  const host = target.hostname.toLowerCase();
+  const isChatGptHost =
+    target.protocol === "https:" &&
+    (host === "chatgpt.com" || host.endsWith(".chatgpt.com"));
+
+  if (token && isChatGptHost) {
+    h.Authorization = `Bearer ${token}`;
+  }
+
   const resp = await retryOn429(() => debugFetch(url, { headers: h }));
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const buffer = Buffer.from(await resp.arrayBuffer());
@@ -190,7 +200,27 @@ function safeDate(ct) {
 }
 
 function sanitizeFilename(name, maxLen = 80) {
-  return name.replace(/[<>:"/\\|?*]/g, "_").replace(/^[. ]+|[. ]+$/g, "").slice(0, maxLen) || "untitled";
+  let safe = name
+    // Normalize line breaks and tabs as normal whitespace.
+    .replace(/[\r\n\t]+/g, " ")
+    // Remove the remaining ASCII control characters.
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
+    // Replace characters forbidden in Windows filenames.
+    .replace(/[<>:"/\\|?*]/g, "_")
+    // Collapse repeated whitespace.
+    .replace(/\s+/g, " ")
+    // Windows forbids leading/trailing dots and spaces.
+    .replace(/^[. ]+|[. ]+$/g, "")
+    .slice(0, maxLen)
+    // Truncation itself may leave a trailing dot or space.
+    .replace(/[. ]+$/g, "");
+
+  // Reserved Windows device names are invalid even with an extension.
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(safe)) {
+    safe = `_${safe}`;
+  }
+
+  return safe || "untitled";
 }
 
 function stripCitations(str) {
@@ -1257,7 +1287,10 @@ async function runExport(token, outputDir, concurrency, createZip, keepAwake, ex
                 totalFiles++;
                 try {
                   const { filename: dlName, buffer } = await downloadFile(ref.fileId, token, ref.filename);
-                  const actualName = deduplicateFilename(dlName || ref.filename, usedNames);
+                  const actualName = deduplicateFilename(
+                    sanitizeFilename(dlName || ref.filename),
+                    usedNames
+                  );
                   writeFileSync(join(convFilesDirFull, actualName), buffer);
                   zipFiles.push({ path: `${zipPrefix}files/${fname}/${actualName}`, data: buffer });
                   fileMap[ref.fileId] = `../files/${fname}/${actualName}`;
